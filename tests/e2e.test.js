@@ -30,10 +30,10 @@ const txt=await p.innerText('main'); console.log(txt.replace(/\n+/g,' | '));
 assert(/Ravi/.test(txt)); assert(/50\.01|50\.00/.test(txt));
 await A.ctx.setOffline(false);
 // sign in -> sync up
-await p.click('[data-act=settings]'); await p.click('[data-x=in]'); await p.waitForFunction(()=>document.querySelector('#status')?.textContent.includes('Synced'),null,{timeout:8000});
+await p.click('.iconbtn[data-act=settings]'); await p.click('[data-x=in]'); await p.waitForFunction(()=>document.querySelector('#status')?.textContent.includes('Synced'),null,{timeout:8000});
 assert(driveFile && Object.keys(driveFile.entries).length===1,'uploaded');
 // device B signs in -> receives data
-const B=await device(); await B.p.click('[data-act=settings]'); await B.p.click('[data-x=in]');
+const B=await device(); await B.p.click('.iconbtn[data-act=settings]'); await B.p.click('[data-x=in]');
 await B.p.waitForFunction(()=>document.body.innerText.includes('Goa trip'),null,{timeout:8000});
 console.log('B sees book; people on B:',await B.p.evaluate(()=>Object.values(S.doc.people).filter(x=>!x.deleted).map(x=>x.name)));
 // B edits offline, then A edits offline; both reconnect
