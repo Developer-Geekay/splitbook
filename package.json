@@ -7,5 +7,5 @@
     "check": "node --check app.js && node --check sw.js",
     "test": "node tests/e2e.test.js"
   },
-  "devDependencies": { "playwright": "^1.48.0" }
+  "devDependencies": { "playwright": "1.63.0" }
 }
