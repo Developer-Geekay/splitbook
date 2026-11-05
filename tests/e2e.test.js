@@ -46,5 +46,15 @@ await p.click('[data-tab=entries]'); console.log((await p.innerText('main')).rep
 // delete on A propagates
 await p.evaluate(()=>{const id=Object.keys(S.doc.entries)[0];del('entries',id)}); await p.evaluate(()=>sync(true));
 await B.p.evaluate(()=>sync(true)); const n=await B.p.evaluate(()=>live('entries').length); assert.equal(n,1);
+// one-tap settle + undo
+await p.click('[data-tab=balances]');
+const before=await p.evaluate(()=>live('entries').length);
+await p.click('[data-act=settle]');
+assert.equal(await p.evaluate(()=>live('entries').length),before+1,'settle recorded');
+await p.click('#toast button');
+assert.equal(await p.evaluate(()=>live('entries').length),before,'settle undone');
+// settings must not expose the Google client id
+await p.click('.iconbtn[data-act=settings]');
+assert(!(await p.content()).includes('id="cid"'),'no client id field');
 console.log('E2E PASS'); await b.close();srv.close();
 })().catch(e=>{console.error(e);process.exit(1)});

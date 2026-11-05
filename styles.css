@@ -170,3 +170,9 @@ code{background:var(--soft);padding:1px 5px;border-radius:5px;font-size:12px}
 #toast button{color:#a5b4fc;font-weight:700}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.wn{margin-top:16px;width:100%;padding:13px 14px;border-radius:14px;border:1.5px solid rgba(255,255,255,.25);background:rgba(255,255,255,.12);color:#fff;outline:0}
+.wn::placeholder{color:rgba(255,255,255,.6)}.wn:focus{border-color:#fff}
+.sec-h .link{float:right;text-transform:none;letter-spacing:0}
+.empty .btn.sm{margin-top:14px}
+#app>main .addrow{margin:14px 0}

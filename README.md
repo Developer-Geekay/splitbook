@@ -24,7 +24,7 @@ cd splitbook && python3 -m http.server 8080   # http://localhost:8080
 2. **OAuth consent screen**: External, add yourself as a *test user* (no verification needed for personal use). Add scope `.../auth/drive.appdata`.
 3. **Credentials → Create credentials → OAuth client ID → Web application**.
    Add your app origin(s) under *Authorized JavaScript origins* (e.g. `http://localhost:8080`, `https://you.github.io`).
-4. Paste the Client ID into `config.js` (`GOOGLE_CLIENT_ID`) or in the app under **Settings → Google OAuth Client ID**.
+4. Put the Client ID in `config.js` (`GOOGLE_CLIENT_ID`) — on GitHub Pages the workflow injects it from the repo variable. Users never see or enter it.
 5. Open the app → ⚙️ → **Sign in with Google**.
 
 ## Notes

@@ -109,7 +109,7 @@ function haveToken() { return S.meta.token && S.meta.tokenExp - 60000 > now(); }
 
 async function requestToken(interactive) {
   const cid = clientId();
-  if (!cid) throw new Error('Set your Google Client ID in Settings first.');
+  if (!cid) throw new Error('Google sign-in is not enabled for this app.');
   await loadGsi();
   if (!tokenClient) {
     tokenClient = google.accounts.oauth2.initTokenClient({
@@ -277,10 +277,11 @@ function homeView() {
       <div class="hero-row"><div><span class="dot pos"></span>Owed to you<b>${cur.map(c => fmt(tot[c].owed, c)).join(' · ')}</b></div>
       <div><span class="dot neg"></span>You owe<b>${cur.map(c => fmt(tot[c].owe, c)).join(' · ')}</b></div></div></section>`;
   })() : `<section class="hero welcome"><div class="hero-l">Welcome to SplitBook</div><div class="hero-t">Track shared money,<br>without the awkwardness.</div>
-      <ol class="steps"><li><i>1</i>Create a book for a trip, home or group</li><li><i>2</i>Add expenses — split in one tap</li><li><i>3</i>See who owes who and settle up</li></ol></section>`;
-  const backup = S.meta.wasSignedIn ? '' : `<button class="banner" data-act="settings"><span>☁️</span><span><b>Back up to Google Drive</b><small>Sync across devices. Works offline.</small></span><i>›</i></button>`;
-  const name = (m && m.name) || '';
-  return `<header class="top"><div><small>${name ? 'Hi,' : 'Hello'}</small><h1>${esc(name || 'there')} 👋</h1></div>${statusPill()}
+      <ol class="steps"><li><i>1</i>Create a book for a trip, home or group</li><li><i>2</i>Add expenses — split in one tap</li><li><i>3</i>See who owes who and settle up</li></ol>
+      ${(!m || m.name === 'Me') ? `<input id="wn" class="wn" placeholder="Your name (optional)" maxlength="40" autocomplete="given-name">` : ''}</section>`;
+  const backup = (S.meta.wasSignedIn || !clientId()) ? '' : `<button class="banner" data-act="settings"><span>☁️</span><span><b>Back up to Google Drive</b><small>Sync across devices. Works offline.</small></span><i>›</i></button>`;
+  const name = (m && m.name !== 'Me' && m.name) || '';
+  return `<header class="top"><div>${name ? `<small>Hi,</small><h1>${esc(name)} 👋</h1>` : `<h1>Welcome 👋</h1>`}</div>${statusPill()}
       <button class="iconbtn" data-act="settings" aria-label="Settings">${m ? avatar(m.id) : '⚙️'}</button></header>
     <main>${hero}${backup}${books.length ? `<div class="sec-h">Your books</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>New book</b></span></button></div>` : ''}</main>
     <button class="fab ${books.length ? '' : 'wide'}" data-act="${books.length ? 'quick-add' : 'new-book'}" aria-label="${books.length ? 'Add expense' : 'New book'}"><i>＋</i><span>${books.length ? 'Add expense' : 'Create your first book'}</span></button>`;
@@ -307,20 +308,21 @@ function bookView() {
       const right = mn === 0 ? `<small class="muted">not involved</small>` : `<b class="${mn > 0 ? 'pos' : 'neg'}">${mn > 0 ? '+' : '−'}${fmt(Math.abs(mn), cur)}</b><small>${mn > 0 ? 'you lent' : 'you borrowed'}</small>`;
       return head + `<button class="tx" data-act="edit-entry" data-id="${e.id}"><span class="tx-ico ${isS ? 'pay' : ''}">${isS ? '🤝' : esc(e.cat || '🧾')}</span>
         <span class="tx-mid"><b>${esc(e.desc || (isS ? 'Payment' : 'Expense'))}</b><small>${sub}</small></span><span class="tx-end">${right}</span></button>`;
-    }).join('') : `<div class="empty"><div class="ico">🧾</div><b>Nothing here yet</b><p>Tap <b>Add expense</b> to record the first one.</p></div>`;
+    }).join('') : `<div class="empty"><div class="ico">🧾</div><b>Nothing here yet</b><p>Record the first shared expense.</p><button class="btn sm" data-act="new-entry">＋ Add expense</button></div>`;
   } else if (tab === 'balances') {
     const ids = b.memberIds.filter(i => person(i) && !person(i).deleted), debts = simplify(net);
     const max = Math.max(1, ...ids.map(i => Math.abs(net[i] || 0)));
     body = `<div class="card pad">` + ids.map(i => { const v = net[i] || 0;
       return `<div class="bal">${avatar(i)}<div class="bal-mid"><div class="bal-top"><b>${esc(pname(i))}</b><span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : 'muted'}">${Math.abs(v) < 1 ? 'settled' : money(v, cur, true)}</span></div>
         <div class="bar"><i class="${v >= 0 ? 'pos' : 'neg'}" style="width:${Math.abs(v) / max * 100}%"></i></div></div></div>`; }).join('') + `</div>
-      <div class="sec-h">Settle up</div>` + (debts.length ? debts.map(d => `<div class="settle"><div class="settle-who">${avatar(d.from, 'sm')}<span class="arrow">→</span>${avatar(d.to, 'sm')}</div>
+      <div class="sec-h">Settle up <button class="link" data-act="share">Share summary</button></div>` + (debts.length ? debts.map(d => `<div class="settle"><div class="settle-who">${avatar(d.from, 'sm')}<span class="arrow">→</span>${avatar(d.to, 'sm')}</div>
         <div class="settle-t"><b>${esc(pname(d.from))} pays ${esc(pname(d.to))}</b><small>${fmt(d.amt, cur)}</small></div>
         <button class="btn sm" data-act="settle" data-from="${d.from}" data-to="${d.to}" data-amt="${d.amt}">Settle</button></div>`).join('') :
       `<div class="empty small"><div class="ico">🎉</div><b>All settled up</b></div>`);
   } else {
     const ids = b.memberIds.filter(i => person(i) && !person(i).deleted);
     body = `<div class="card pad">${ids.map(i => `<div class="bal">${avatar(i)}<div class="bal-mid"><b>${esc(pname(i))}</b></div></div>`).join('')}</div>
+      <div class="addrow"><input id="addm" placeholder="Add someone to this book…" maxlength="40" autocomplete="off"><button class="btn" data-act="add-member">Add</button></div>
       <div class="btns two"><button class="btn" data-act="edit-book">✏️ Edit book</button><button class="btn danger" data-act="del-book">🗑 Delete</button></div>`;
   }
   return `<header class="top"><button class="iconbtn" data-act="back" aria-label="Back">‹</button><div class="grow"><h1>${esc(b.emoji || '📒')} ${esc(b.name)}</h1></div>${statusPill()}
@@ -341,10 +343,13 @@ function closeSheet() { const o = $('.overlay'); if (o) { o.remove(); document.b
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 /* ---- book form ---- */
+const REGION_CUR = { IN: 'INR', US: 'USD', GB: 'GBP', AU: 'AUD', CA: 'CAD', JP: 'JPY', SG: 'SGD', AE: 'AED', CH: 'CHF', CN: 'CNY', BR: 'BRL', ZA: 'ZAR', MX: 'MXN',
+  DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR', BE: 'EUR', AT: 'EUR', FI: 'EUR', GR: 'EUR' };
+const localeCurrency = () => REGION_CUR[((navigator.language || '').split('-')[1] || '').toUpperCase()] || 'INR';
 const EMOJIS = ['📒', '✈️', '🏠', '🍻', '🎉', '🏖️', '🚗', '🛒', '💼', '❤️'];
 function bookSheet(id) {
   const ex = id && S.doc.books[id], m = me();
-  const B = ex ? { ...ex, memberIds: [...ex.memberIds] } : { name: '', emoji: '📒', currency: localStorage.getItem('sb.cur') || 'INR', memberIds: m ? [m.id] : [] };
+  const B = ex ? { ...ex, memberIds: [...ex.memberIds] } : { name: '', emoji: '📒', currency: localStorage.getItem('sb.cur') || localeCurrency(), memberIds: m ? [m.id] : [] };
   const o = openSheet('<div id="form"></div>'), root = $('#form', o);
   const keep = () => { if ($('#bn', o)) { B.name = $('#bn', o).value; B.currency = $('#bc', o).value; } };
   const draw = () => {
@@ -483,7 +488,7 @@ function entrySheet(entryId, preset, bookId) {
       const entry = { id: ex ? ex.id : uid(), bookId: bid, type: E.type, desc: isS ? 'Payment' : (E.desc.trim() || catLabel || 'Expense'), amount: total, paidBy: E.paidBy,
         split: Object.fromEntries(Object.entries(c.split).filter(([, n]) => n > 0 || isS)), method: isS ? 'exact' : E.method, vals,
         date: E.date, cat: E.cat, note: E.note.trim(), createdAt: ex ? ex.createdAt : now() };
-      put('entries', entry); closeSheet();
+      put('entries', entry); buzz(); closeSheet();
       if (S.ui.bookId !== bid) go('book/' + bid);
       toast(ex ? 'Entry updated' : isS ? 'Payment recorded' : 'Expense added');
     }
@@ -501,12 +506,10 @@ function settingsSheet() {
       <div class="note"><span class="sync-dot ${st.cls}"></span>${st.text}${S.meta.lastSync ? ' · last sync ' + new Date(S.meta.lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}${S.sync.error ? '<br>' + esc(S.sync.error) : ''}</div>
       <div class="btns two"><button class="btn primary" data-x="sync">Sync now</button><button class="btn" data-x="out">Sign out</button></div>` :
     `<b>☁️ Back up with Google Drive</b><p class="note">Your data stays on this device and is also saved to a private, hidden folder in <i>your own</i> Google Drive. Works offline and syncs when you reconnect.</p>
-      <button class="cta" data-x="in">Continue with Google</button>`}</div>
+      ${clientId() ? `<button class="cta" data-x="in">Continue with Google</button>` : `<p class="note">Google backup isn't enabled for this app yet. Everything still works and is saved on this device.</p>`}`}</div>
     <div class="lbl">Your name</div>
     <div class="addrow"><input id="myname" value="${esc((m || {}).name || '')}"><button class="btn" data-x="savename">Save</button></div>
     <div class="lbl">Backup</div><div class="btns two"><button class="btn" data-x="export">Export</button><button class="btn" data-x="import">Import</button></div>
-    <details class="adv" ${clientId() ? '' : 'open'}><summary>Advanced · Google Client ID</summary>
-      <div class="addrow"><input id="cid" value="${esc(clientId())}" placeholder="xxxx.apps.googleusercontent.com"><button class="btn" data-x="savecid">Save</button></div></details>
     <p class="note c">SplitBook · works offline · installable</p>`);
   o.addEventListener('click', async e => {
     const x = e.target.closest('[data-x]')?.dataset.x; if (!x) return;
@@ -514,7 +517,6 @@ function settingsSheet() {
     else if (x === 'in') { closeSheet(); await signIn(); }
     else if (x === 'out') { closeSheet(); signOut(); }
     else if (x === 'sync') { closeSheet(); await sync(true); toast(S.sync.state === 'err' ? 'Sync failed: ' + S.sync.error : 'Synced ✓'); }
-    else if (x === 'savecid') { S.meta.clientId = $('#cid', o).value.trim(); tokenClient = null; persist(); toast('Client ID saved'); }
     else if (x === 'savename') { const n = $('#myname', o).value.trim(); if (m && n) { put('people', { ...m, name: n }); toast('Saved'); } }
     else if (x === 'export') {
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(S.doc, null, 2)], { type: 'application/json' }));
@@ -528,14 +530,22 @@ function settingsSheet() {
   });
 }
 
+/* ---- share balances ---- */
+const buzz = () => { try { navigator.vibrate && navigator.vibrate(12); } catch {} };
+async function shareSummary() {
+  const b = S.doc.books[S.ui.bookId], debts = simplify(netBalances(b.id));
+  const text = `${b.emoji || '📒'} ${b.name} — who owes who\n` + (debts.length ? debts.map(d => `• ${pname(d.from) === 'You' ? 'I' : pname(d.from)} ${pname(d.from) === 'You' ? 'owe' : 'owes'} ${pname(d.to) === 'You' ? 'me' : pname(d.to)} ${fmt(d.amt, b.currency)}`).join('\n') : 'All settled up 🎉');
+  try { if (navigator.share) { await navigator.share({ text }); return; } await navigator.clipboard.writeText(text); toast('Summary copied'); } catch { /* cancelled */ }
+}
+
 /* ───────────────────────── events ───────────────────────── */
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-act]'); if (!t || t.closest('.overlay')) return;
   const a = t.dataset.act, d = t.dataset;
   if (a === 'back') go('');
   else if (a === 'settings') settingsSheet();
-  else if (a === 'sync-now') { if (!S.meta.wasSignedIn) settingsSheet(); else if (!navigator.onLine) toast('Offline — changes will sync later'); else sync(true).then(() => toast(S.sync.state === 'err' ? 'Sync failed: ' + S.sync.error : 'Synced ✓')); }
-  else if (a === 'new-book') bookSheet();
+  else if (a === 'sync-now') { if (!S.meta.wasSignedIn) { if (clientId()) settingsSheet(); else toast('Saved on this device · Google backup not enabled'); } else if (!navigator.onLine) toast('Offline — changes will sync later'); else sync(true).then(() => toast(S.sync.state === 'err' ? 'Sync failed: ' + S.sync.error : 'Synced ✓')); }
+  else if (a === 'new-book') { const w = $('#wn'), p = me(); if (w && p && w.value.trim()) put('people', { ...p, name: w.value.trim() }); bookSheet(); }
   else if (a === 'open-book') { S.ui.tab = 'entries'; go('book/' + d.id); }
   else if (a === 'tab') { S.ui.tab = d.tab; render(); }
   else if (a === 'new-entry') entrySheet();
@@ -548,8 +558,19 @@ document.addEventListener('click', e => {
     ens.forEach(en => del('entries', en.id)); del('books', id); go('');
     toast('Book deleted', () => { put('books', old); ens.forEach(en => put('entries', en)); toast('Restored'); });
   }
-  else if (a === 'settle') entrySheet(null, { type: 'settle', paidBy: d.from, sel: [d.to], amount: toInput(+d.amt, S.doc.books[S.ui.bookId].currency) });
+  else if (a === 'settle') {
+    const id = uid(), bk = S.doc.books[S.ui.bookId];
+    put('entries', { id, bookId: bk.id, type: 'settle', desc: 'Payment', amount: +d.amt, paidBy: d.from, split: { [d.to]: +d.amt }, method: 'exact', date: isoDay(Date.now()), cat: '🤝', note: '', createdAt: now() });
+    buzz(); toast(`${pname(d.from)} paid ${pname(d.to)} ${fmt(+d.amt, bk.currency)}`, () => { del('entries', id); toast('Payment removed'); });
+  }
+  else if (a === 'share') shareSummary();
+  else if (a === 'add-member') {
+    const inp = $('#addm'), n = inp && inp.value.trim(), bk = S.doc.books[S.ui.bookId]; if (!n) return;
+    const p = { id: uid(), name: n, createdAt: now() }; put('people', p); put('books', { ...bk, memberIds: [...bk.memberIds, p.id] }); toast(n + ' added');
+    setTimeout(() => { const i = $('#addm'); i && i.focus(); }, 30);
+  }
 });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'addm') { e.preventDefault(); $('[data-act=add-member]').click(); } });
 window.addEventListener('hashchange', route);
 window.addEventListener('online', () => { render(); sync(false); });
 window.addEventListener('offline', () => { render(); toast('Offline — everything is saved on this device'); });
