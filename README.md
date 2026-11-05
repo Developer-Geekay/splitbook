@@ -12,6 +12,7 @@ equally / by exact amount / by % / by shares, see balances and suggested settle-
 * **Recurring entries** – mark any expense *Every week / month / year* (Netflix, rent, bills). Past and due occurrences are created automatically, safe across devices (deterministic ids, no duplicates, deleted ones stay deleted).
 * **Loans** – pick the 💸 *Loan* category to lend/borrow with optional interest (% per year, simple) and a due date. See repaid/outstanding, overdue badges, a home-screen reminder, one-tap repayment, and *add interest to balance*.
 * **Sample data** – Settings → Demo loads realistic books (daily, trip, rent & bills, subscriptions, loans, EUR trip).
+* **No native popups** – confirmations, the currency picker (160+ currencies, searchable) and the repeat options are all in-app UI, so nothing gets blocked or shows browser warnings.
 * Installable (Add to Home screen), dark mode, JSON export/import.
 
 ## Run

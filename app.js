@@ -326,6 +326,63 @@ const dayLabel = d => {
   return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 };
 
+
+/* ───────────────────────── in-app dialogs (no native confirm/alert/prompt/select) ───────────────────────── */
+function openLayer(html, cls = '') {
+  let res; const done = new Promise(r => { res = r; });
+  const el = document.createElement('div'); el.className = 'layer ' + cls; el.innerHTML = html;
+  const close = v => { if (el.isConnected) { el.remove(); res(v); } };
+  el._close = close; el.addEventListener('pointerdown', e => { if (e.target === el) close(null); });
+  document.body.appendChild(el); return { el, done, close };
+}
+function askConfirm({ title, message = '', ok = 'OK', cancel = 'Cancel', danger = false }) {
+  const L = openLayer(`<div class="dlg" role="alertdialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${message ? `<p>${esc(message)}</p>` : ''}
+    <div class="btns two"><button class="btn" data-x="no">${esc(cancel)}</button><button class="btn ${danger ? 'danger-fill' : 'primary'}" data-x="ok">${esc(ok)}</button></div></div>`, 'center');
+  L.el.addEventListener('click', e => { const x = e.target.closest('[data-x]'); if (x) L.close(x.dataset.x === 'ok'); });
+  setTimeout(() => { const n = L.el.querySelector('[data-x=no]'); n && n.focus(); }, 30);   // safe default
+  return L.done.then(v => !!v);
+}
+const CUR_POPULAR = ['INR', 'USD', 'EUR', 'GBP', 'AUD', 'CAD', 'SGD', 'AED', 'JPY', 'CHF', 'CNY', 'NZD'];
+let _curs = null;
+function allCurrencies() {
+  if (_curs) return _curs;
+  let codes = []; try { codes = Intl.supportedValuesOf('currency'); } catch {}
+  if (codes.length < 20) codes = [...CURRENCIES];
+  let dn = null; try { dn = new Intl.DisplayNames([navigator.language || 'en', 'en'], { type: 'currency' }); } catch {}
+  return (_curs = codes.map(c => { let name = c; try { name = (dn && dn.of(c)) || c; } catch {} return { code: c, name, sym: symbol(c) }; }));
+}
+const curName = c => (allCurrencies().find(x => x.code === c) || { name: c }).name;
+function pickCurrency(current) {
+  const L = openLayer(`<div class="sheet picker" role="dialog" aria-modal="true" aria-label="Choose currency"><div class="grab"></div>
+    <div class="sh-head"><h2>Currency</h2><button class="iconbtn" data-x="x" aria-label="Close">✕</button></div>
+    <input id="cq" class="desc" placeholder="Search — rupee, EUR, dollar…" autocomplete="off" autocapitalize="off"><div id="cl" class="clist"></div></div>`, 'bottom');
+  const list = $('#cl', L.el), row = c => `<button class="cur-row ${c.code === current ? 'on' : ''}" data-v="${c.code}"><span class="cur-sym">${esc(c.sym)}</span><span class="grow"><b>${c.code}</b><small>${esc(c.name)}</small></span>${c.code === current ? '<i>✓</i>' : ''}</button>`;
+  const draw = q => {
+    const all = allCurrencies(); q = q.trim().toLowerCase();
+    if (q) { const score = c => { const code = c.code.toLowerCase(), name = c.name.toLowerCase();
+        return code === q ? 0 : code.startsWith(q) ? 1 : name.split(/[\s()-]+/).some(w => w.startsWith(q)) ? 2 : c.sym.toLowerCase() === q ? 2 : (code.includes(q) || name.includes(q)) ? 3 : 9; };
+      const r = all.map(c => [score(c), c]).filter(x => x[0] < 9).sort((x, y) => x[0] - y[0] || x[1].code.localeCompare(y[1].code)).map(x => x[1]); list.innerHTML = r.length ? r.map(row).join('') : `<div class="empty small"><b>No match</b><p>Try the 3-letter code, e.g. “CHF”.</p></div>`; return; }
+    const pop = [...new Set([current, ...CUR_POPULAR])].map(c => all.find(x => x.code === c)).filter(Boolean);
+    list.innerHTML = `<div class="lbl">Popular</div>${pop.map(row).join('')}<div class="lbl">All currencies</div>${all.map(row).join('')}`;
+  };
+  draw('');
+  L.el.addEventListener('input', e => { if (e.target.id === 'cq') draw(e.target.value); });
+  L.el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'cq') { const f = list.querySelector('.cur-row'); f && L.close(f.dataset.v); } });
+  L.el.addEventListener('click', e => { const t = e.target.closest('[data-v],[data-x]'); if (!t) return; L.close(t.dataset.v || null); });
+  setTimeout(() => { const q = $('#cq', L.el); q && q.focus(); }, 60);
+  return L.done;
+}
+/* Changing a book's currency keeps the face value of every amount (₹100.00 → ¥100): no exchange-rate conversion. */
+function changeCurrency(bookId, cur) {
+  const b = S.doc.books[bookId]; if (!b || b.currency === cur) return;
+  const k = digits(cur) - digits(b.currency), m = 10 ** Math.abs(k), conv = v => k >= 0 ? v * m : Math.round(v / m);
+  for (const e of bookEntries(bookId)) {
+    const amount = conv(e.amount), keys = Object.keys(e.split), w = {}; keys.forEach(i => w[i] = e.split[i]);
+    put('entries', { ...e, amount, split: keys.length ? (k >= 0 ? Object.fromEntries(keys.map(i => [i, e.split[i] * m])) : byWeights(amount, w)) : {} });
+  }
+  put('books', { ...b, currency: cur });
+}
+
 /* ───────────────────────── UI: toast & routing ───────────────────────── */
 let toastT;
 function toast(msg, undo) {
@@ -516,24 +573,26 @@ function openSheet(html) {
   document.body.appendChild(o); document.body.classList.add('noscroll'); return o;
 }
 function closeSheet() { const o = $('.overlay'); if (o) { o.remove(); document.body.classList.remove('noscroll'); if (pendingReload) location.reload(); } }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; const top = [...document.querySelectorAll('.layer')].pop(); if (top) top._close(null); else closeSheet(); });
 
 /* ---- book form ---- */
 const REGION_CUR = { IN: 'INR', US: 'USD', GB: 'GBP', AU: 'AUD', CA: 'CAD', JP: 'JPY', SG: 'SGD', AE: 'AED', CH: 'CHF', CN: 'CNY', BR: 'BRL', ZA: 'ZAR', MX: 'MXN',
-  DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR', BE: 'EUR', AT: 'EUR', FI: 'EUR', GR: 'EUR' };
+  DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR', BE: 'EUR', AT: 'EUR', FI: 'EUR', GR: 'EUR', PK: 'PKR', BD: 'BDT', LK: 'LKR', NP: 'NPR',
+  ID: 'IDR', MY: 'MYR', TH: 'THB', PH: 'PHP', VN: 'VND', KR: 'KRW', SA: 'SAR', QA: 'QAR', KW: 'KWD', OM: 'OMR', BH: 'BHD', NZ: 'NZD', SE: 'SEK', NO: 'NOK', DK: 'DKK',
+  PL: 'PLN', TR: 'TRY', NG: 'NGN', KE: 'KES', EG: 'EGP', IL: 'ILS', RU: 'RUB', UA: 'UAH', CZ: 'CZK', HU: 'HUF', AR: 'ARS', CL: 'CLP', CO: 'COP', HK: 'HKD', TW: 'TWD' };
 const localeCurrency = () => REGION_CUR[((navigator.language || '').split('-')[1] || '').toUpperCase()] || 'INR';
 const EMOJIS = ['📒', '✈️', '🏠', '🍻', '🎉', '🏖️', '🚗', '🛒', '💼', '❤️'];
 function bookSheet(id) {
   const ex = id && S.doc.books[id], m = me();
   const B = ex ? { ...ex, memberIds: [...ex.memberIds] } : { name: '', emoji: '📒', currency: localStorage.getItem('sb.cur') || localeCurrency(), memberIds: m ? [m.id] : [] };
   const o = openSheet('<div id="form"></div>'), root = $('#form', o);
-  const keep = () => { if ($('#bn', o)) { B.name = $('#bn', o).value; B.currency = $('#bc', o).value; } };
+  const keep = () => { if ($('#bn', o)) B.name = $('#bn', o).value; };
   const draw = () => {
     const people = live('people');
     root.innerHTML = `<div class="sh-head"><h2>${ex ? 'Edit book' : 'New book'}</h2><button class="iconbtn" data-x="close" aria-label="Close">✕</button></div>
       <label class="field"><span>Name</span><input id="bn" value="${esc(B.name)}" placeholder="Goa trip, Flat 4B…" maxlength="60" autocomplete="off"></label>
       <div class="field"><span>Icon</span><div class="emojis">${EMOJIS.map(e => `<button data-x="emoji" data-v="${e}" class="${B.emoji === e ? 'on' : ''}">${e}</button>`).join('')}</div></div>
-      <label class="field"><span>Currency</span><select id="bc">${[...new Set([B.currency, ...CURRENCIES])].map(c => `<option ${c === B.currency ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+      <div class="field"><span>Currency</span><button class="curbtn" data-x="cur"><b>${esc(symbol(B.currency))} ${B.currency}</b><small>${esc(curName(B.currency))}</small><i>›</i></button>${ex ? '<p class="note">Changing it keeps the same numbers — no exchange-rate conversion.</p>' : ''}</div>
       <div class="field"><span>Who's in this book?</span><div class="pcs">${people.map(p => `<button class="pc ${B.memberIds.includes(p.id) ? 'on' : ''}" data-x="mem" data-v="${p.id}">${avatar(p.id, 'xs')}${esc(p.isMe ? 'You' : p.name)}</button>`).join('')}</div>
       <div class="addrow"><input id="np" placeholder="Add someone new…" autocomplete="off"><button class="btn" data-x="addp">Add</button></div></div>
       <button class="cta" data-x="save">${ex ? 'Save changes' : 'Create book'}</button>`;
@@ -544,6 +603,7 @@ function bookSheet(id) {
     const t = e.target.closest('[data-x]'); if (!t) return; const x = t.dataset.x; keep();
     if (x === 'close') closeSheet();
     else if (x === 'emoji') { B.emoji = t.dataset.v; draw(); }
+    else if (x === 'cur') { pickCurrency(B.currency).then(c => { if (c) { B.currency = c; draw(); } }); }
     else if (x === 'mem') { const i = B.memberIds.indexOf(t.dataset.v); i < 0 ? B.memberIds.push(t.dataset.v) : B.memberIds.splice(i, 1); draw(); }
     else if (x === 'addp') { const n = $('#np', o).value.trim(); if (!n) return; const p = { id: uid(), name: n, createdAt: now() }; put('people', p); B.memberIds.push(p.id); draw(); $('#np', o).focus(); }
     else if (x === 'save') {
@@ -551,7 +611,8 @@ function bookSheet(id) {
       if (B.memberIds.length < 1) return toast('Add at least one person');
       localStorage.setItem('sb.cur', B.currency);
       const book = { ...B, name: B.name.trim(), id: ex ? ex.id : uid(), createdAt: ex ? ex.createdAt : now() };
-      put('books', book); closeSheet(); if (!ex) go('book/' + book.id); toast(ex ? 'Book updated' : 'Book created');
+      if (ex && ex.currency !== book.currency) { changeCurrency(ex.id, book.currency); book.updatedAt = now(); }
+      put('books', { ...book, ...(ex ? { currency: S.doc.books[ex.id].currency } : {}) }); closeSheet(); if (!ex) go('book/' + book.id); toast(ex ? 'Book updated' : 'Book created');
     }
   });
   if (!ex) setTimeout(() => $('#bn', o) && $('#bn', o).focus(), 60);
@@ -630,14 +691,14 @@ function entrySheet(entryId, preset, bookId) {
         ${isS ? '' : `<label class="field grow"><span>Note</span><input id="en" value="${esc(E.note)}" placeholder="Optional" maxlength="300"></label>`}</div>
       ${isS ? '' : `${isLoanForm() ? `<div class="loanbox"><div class="lbl">Loan terms <small>optional</small></div><div class="row2"><label class="field"><span>Interest % / year</span><input id="elr" inputmode="decimal" value="${esc(E.rate)}" placeholder="0"></label>
         <label class="field"><span>Due date</span><input id="eld" type="date" value="${E.due}"></label></div></div>` : ''}
-        ${ex && ex.fromRule ? `<p class="note">🔁 Part of a recurring series. Edit the original to change future ones.</p>` : `<label class="field"><span>Repeat</span><select id="er">${[['', "Doesn't repeat"], ['weekly', 'Every week'], ['monthly', 'Every month'], ['yearly', 'Every year']].map(([k, l]) => `<option value="${k}" ${E.repeat === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`}`}
+        ${ex && ex.fromRule ? `<p class="note">🔁 Part of a recurring series. Edit the original to change future ones.</p>` : `<div class="field"><span>Repeat</span><div class="pcs scroll">${[['', 'Never'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['yearly', 'Yearly']].map(([k, l]) => `<button class="pc ${E.repeat === k ? 'on' : ''}" data-x="rep" data-v="${k}">${l}</button>`).join('')}</div></div>`}`}
       <div class="btns"><button class="cta" id="savebtn" data-x="save"></button>${ex ? `<button class="btn danger" data-x="del" aria-label="Delete">🗑</button>` : ''}</div>`;
     updateCalc();
   }
   const pull = () => {
     const g = id => root.querySelector(id);
     if (g('#ed')) E.desc = g('#ed').value; if (g('#ea')) E.amount = g('#ea').value; if (g('#edt')) E.date = g('#edt').value || E.date; if (g('#en')) E.note = g('#en').value;
-    if (g('#er')) E.repeat = g('#er').value; if (g('#elr')) E.rate = g('#elr').value; if (g('#eld')) E.due = g('#eld').value;
+    if (g('#elr')) E.rate = g('#elr').value; if (g('#eld')) E.due = g('#eld').value;
   };
   root.addEventListener('input', e => {
     if (e.target.dataset.val) { E.vals[e.target.dataset.val] = e.target.value; updateCalc(); }
@@ -654,6 +715,7 @@ function entrySheet(entryId, preset, bookId) {
     if (x === 'close') closeSheet();
     else if (x === 'type') { E.type = v; E.sel = v === 'settle' ? [members.find(i => i !== E.paidBy)].filter(Boolean) : [...members]; if (v === 'income') E.cat = '💼'; else if (INCOME_CATS.some(([k]) => k === E.cat) && E.cat !== '🎁') E.cat = '🧾'; draw(); }
     else if (x === 'book') { setBook(v); E.paidBy = defPayer(); E.sel = [...members]; E.vals = {}; if (b.personal && E.type === 'settle') E.type = 'expense'; if (!b.personal && E.type === 'income') { E.type = 'expense'; E.cat = '🧾'; } draw(); }
+    else if (x === 'rep') { E.repeat = v; draw(); }
     else if (x === 'cat') { E.cat = v; if (!E.desc.trim()) E.desc = t.dataset.l === 'Other' ? '' : t.dataset.l; if (v === '💸' && !ex && E.sel.length !== 1) E.sel = [members.find(i => i !== E.paidBy)].filter(Boolean); draw(); $('#ed', root).focus(); }
     else if (x === 'paid') { E.paidBy = v; if (E.type === 'settle' && E.sel[0] === v) E.sel = [members.find(i => i !== v)]; draw(); }
     else if (x === 'to') { E.sel = [v]; draw(); }
@@ -701,16 +763,16 @@ function settingsSheet() {
       ${clientId() ? `<button class="cta" data-x="in">Continue with Google</button>` : `<p class="note">Google backup isn't enabled for this app yet. Everything still works and is saved on this device.</p>`}`}</div>
     <div class="lbl">Your name</div>
     <div class="addrow"><input id="myname" value="${esc((m || {}).name || '')}"><button class="btn" data-x="savename">Save</button></div>
-    ${personalBook() ? `<div class="lbl">My money currency</div><select id="pcur">${[...new Set([personalBook().currency, ...CURRENCIES])].map(c => `<option ${c === personalBook().currency ? 'selected' : ''}>${c}</option>`).join('')}</select><p class="note">Changes the symbol only — amounts are not converted.</p>` : ''}
+    ${personalBook() ? `<div class="lbl">My money currency</div><button class="curbtn" data-x="pcur"><b>${esc(symbol(personalBook().currency))} ${personalBook().currency}</b><small>${esc(curName(personalBook().currency))}</small><i>›</i></button><p class="note">Keeps the same numbers — no exchange-rate conversion.</p>` : ''}
     <div class="lbl">Demo</div>
     <div class="card pad"><p class="note">Fill the app with realistic example books — daily spends, a trip, rent &amp; bills, subscriptions, loans and a EUR weekend — to see how everything works.</p>
       <div class="btns two" style="margin:8px 0"><button class="btn" data-x="${hasSample() ? 'sample-clear' : 'sample-load'}">${hasSample() ? 'Remove sample data' : 'Load sample data'}</button></div></div>
     <div class="lbl">Backup</div><div class="btns two"><button class="btn" data-x="export">Export</button><button class="btn" data-x="import">Import</button></div>
     <p class="note c">SplitBook · works offline · installable</p>`);
-  o.addEventListener('change', e => { if (e.target.id === 'pcur' && personalBook()) { put('books', { ...personalBook(), currency: e.target.value }); toast('Currency updated'); } });
   o.addEventListener('click', async e => {
     const x = e.target.closest('[data-x]')?.dataset.x; if (!x) return;
     if (x === 'close') closeSheet();
+    else if (x === 'pcur') { const c = await pickCurrency(personalBook().currency); if (c && c !== personalBook().currency) { changeCurrency(PERSONAL_ID, c); toast('Currency updated'); settingsSheet(); } }
     else if (x === 'in') { closeSheet(); await signIn(); }
     else if (x === 'out') { closeSheet(); signOut(); }
     else if (x === 'sync') { closeSheet(); await sync(true); toast(S.sync.state === 'err' ? 'Sync failed: ' + S.sync.error : 'Synced ✓'); }
@@ -869,12 +931,13 @@ document.addEventListener('click', e => {
   else if (a === 'edit-entry') entrySheet(d.id);
   else if (a === 'edit-book') bookSheet(S.ui.bookId);
   else if (a === 'del-book') {
-    if (!confirm('Delete this book and all its entries?')) return;
+    const bk0 = S.doc.books[S.ui.bookId], n0 = bookEntries(S.ui.bookId).length;
+    askConfirm({ title: `Delete “${bk0.name}”?`, message: `This removes the book and its ${n0} entr${n0 === 1 ? 'y' : 'ies'} on all your devices. You can undo right after.`, ok: 'Delete', danger: true }).then(yes => { if (!yes) return;
     const id = S.ui.bookId, old = S.doc.books[id], ens = bookEntries(id), t = now();
     ens.forEach(en => { S.doc.entries[en.id] = { id: en.id, deleted: true, updatedAt: t, bookId: id }; });
     S.doc.books[id] = { id, deleted: true, updatedAt: t };
     S.ui.view = 'home'; S.ui.bookId = null; history.replaceState(null, '', location.pathname + location.search); touched();
-    toast('Book deleted', () => { put('books', old); ens.forEach(en => put('entries', en)); toast('Restored'); });
+    toast('Book deleted', () => { put('books', old); ens.forEach(en => put('entries', en)); toast('Restored'); }); });
   }
   else if (a === 'settle') {
     const id = uid(), bk = S.doc.books[S.ui.bookId];

@@ -20,7 +20,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
       if (u.includes('alt=media')) return r.fulfill({ json: drive });
       return r.fulfill({ json: { files: drive ? [{ id: 'F1' }] : [] } });
     });
-    const p = await ctx.newPage(); p.errors = []; p.on('pageerror', e => p.errors.push(e.message)); p.on('dialog', d => d.accept());
+    const p = await ctx.newPage(); p.errors = []; p.on('pageerror', e => p.errors.push(e.message)); p.dialogs = []; p.on('dialog', d => { p.dialogs.push(d.message()); d.dismiss(); });
     await p.goto(URL); all.push(p); return { ctx, p };
   }
   const A = await device(), p = A.p;
@@ -51,7 +51,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   ok(!(await p.$('[data-tab=balances]')) && !(await p.$('[data-tab=members]')), 'no Balances / People tabs on My money');
   await p.click('[data-act=new-entry]');
   await p.fill('#ea', '40000'); await p.click('[data-x=type][data-v=income]'); await p.fill('#ed', 'Salary (recurring)');
-  const d65 = await p.evaluate(() => isoDay(Date.now() - 65 * 864e5)); await p.fill('#edt', d65); await p.selectOption('#er', 'monthly'); await p.click('[data-x=save]');
+  const d65 = await p.evaluate(() => isoDay(Date.now() - 65 * 864e5)); await p.fill('#edt', d65); await p.click('[data-x=rep][data-v=monthly]'); await p.click('[data-x=save]');
   const gen = await p.evaluate(() => live('entries').filter(e => e.desc === 'Salary (recurring)').map(e => [e.type, e.amount]));
   ok(gen.length >= 3 && gen.every(g => g[0] === 'income' && g[1] === 4000000), `recurring salary backfilled ${gen.length} monthly income entries`);
   txt = await p.innerText('#app'); ok(/recurring · \+/i.test(txt), 'Recurring card shows monthly income');
@@ -92,7 +92,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   console.log('Deleting a book from every tab');
   for (const tab of ['entries', 'balances', 'members']) {
     await p.evaluate(n => { const id = uid(), me0 = me().id; S.doc.books[id] = { id, name: n, emoji: '📒', currency: 'INR', memberIds: [me0], createdAt: 1, updatedAt: now() }; for (let i = 0; i < 3; i++) { const e = uid(); S.doc.entries[e] = { id: e, bookId: id, type: 'expense', desc: 'x' + i, amount: 100, paidBy: me0, split: { [me0]: 100 }, method: 'equal', date: isoDay(Date.now()), cat: '🧾', createdAt: now() + i, updatedAt: now() }; } touched(); }, 'Doomed ' + tab);
-    await p.click('.bk:has-text("Doomed ' + tab + '")'); await p.waitForSelector('.hero.compact'); await p.click('[data-tab=members]'); await p.click('[data-act=del-book]');
+    await p.click('.bk:has-text("Doomed ' + tab + '")'); await p.waitForSelector('.hero.compact'); await p.click('[data-tab=members]'); await p.click('[data-act=del-book]'); await p.click('.dlg [data-x=ok]');
     // while sitting on the People tab the delete button is there; for other tabs navigate via tab → then delete (button lives on People)
     const st2 = await p.evaluate(() => ({ hash: location.hash, view: S.ui.view, home: !!document.querySelector('.mm') }));
     ok(st2.hash === '' && st2.view === 'home' && st2.home, `delete (from ${tab} flow) returns to home immediately`);
@@ -130,9 +130,10 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   ok(sd.inc >= 3 && sd.exp >= 20 && sd.books === 6, `sample data: ${sd.inc} income + ${sd.exp} personal expense entries, 6 shared books`);
   await p.evaluate(() => clearSampleData());
   eq(await p.evaluate(() => [!!personalBook(), live('entries').filter(e => isSample(e.id)).length]), [true, 0], 'removing samples keeps My money and your own entries');
-  await p.click('.iconbtn[data-act=settings]'); await p.selectOption('#pcur', 'EUR');
+  await p.click('.iconbtn[data-act=settings]'); await p.click('[data-x=pcur]'); await p.fill('#cq', 'EUR'); await p.click('.cur-row[data-v=EUR]');
   ok(/€/.test(await p.innerText('.mm-n')) || /€/.test(await p.innerText('#app')), 'My money currency can be changed in Settings');
   ok(all.every(d => d.errors.length === 0), 'no JS errors on any device');
+  ok(all.every(d => d.dialogs.length === 0), 'no native alert/confirm/prompt dialogs were ever shown');
 
   console.log(`\nPERSONAL PASS (${pass} checks)`);
   await b.close(); srv.close();

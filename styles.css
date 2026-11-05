@@ -209,3 +209,18 @@ select{width:100%;padding:13px 14px;border-radius:14px;border:1.5px solid transp
 .mrow.cat .ci{width:34px;height:34px;border-radius:11px;background:var(--soft);display:grid;place-items:center;font-size:17px}
 .mrow.cat .bar{margin-top:6px}
 .hero-row>div:nth-child(3){text-align:right}
+
+/* in-app dialogs & pickers */
+.layer{position:fixed;inset:0;z-index:40;background:rgba(10,10,25,.5);backdrop-filter:blur(3px);display:flex;justify-content:center;animation:fade .2s}
+.layer.bottom{align-items:flex-end}.layer.center{align-items:center;padding:24px}
+.dlg{background:var(--card);border-radius:24px;padding:22px 20px 18px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.35);animation:pop .2s cubic-bezier(.2,.9,.3,1)}
+.dlg h3{margin:0 0 8px;font-size:18px;letter-spacing:-.02em}.dlg p{margin:0 0 4px;color:var(--muted);font-size:14.5px;line-height:1.45}
+@keyframes pop{from{transform:scale(.94);opacity:0}}
+.btn.danger-fill{background:var(--neg);color:#fff;box-shadow:none}
+.picker{display:flex;flex-direction:column;max-height:86dvh}.picker .clist{overflow:auto;margin:10px -4px 0;padding:0 4px;flex:1;overscroll-behavior:contain}
+.cur-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:10px 8px;border-radius:14px}.cur-row:active,.cur-row:hover{background:var(--soft)}
+.cur-row.on{background:color-mix(in srgb,var(--brand) 12%,var(--card))}.cur-row.on i{font-style:normal;color:var(--brand);font-weight:800}
+.cur-sym{width:42px;height:42px;border-radius:13px;background:var(--soft);display:grid;place-items:center;font-weight:700;font-size:15px;flex:none;overflow:hidden}
+.cur-row b{display:block}.cur-row small{color:var(--muted);font-size:13px}
+.curbtn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:12px 14px;border-radius:14px;background:var(--card);box-shadow:var(--sh)}
+.curbtn b{font-size:16px}.curbtn small{color:var(--muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.curbtn i{font-style:normal;color:var(--muted);font-size:20px}

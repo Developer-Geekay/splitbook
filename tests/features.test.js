@@ -80,7 +80,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   console.log('Add a subscription through the UI');
   await p.evaluate(() => { S.ui.view = 'book'; S.ui.bookId = 't'; S.ui.tab = 'entries'; render(); });
   await p.click('.fab'); await p.fill('#ea', '499'); await p.fill('#ed', 'Gym'); await p.fill('#edt', await p.evaluate(() => D(70)));
-  await p.selectOption('#er', 'monthly'); await p.click('[data-x=save]');
+  await p.click('[data-x=rep][data-v=monthly]'); await p.click('[data-x=save]');
   const gym = await p.evaluate(() => ({ t: live('entries').filter(e => e.desc === 'Gym' && e.repeat).length, n: live('entries').filter(e => e.desc === 'Gym').length }));
   ok(gym.t === 1 && gym.n >= 3, `saving with "Every month" backfills past months (${gym.n} Gym entries)`);
   const txt = await p.innerText('#app'); ok(/recurring · .*\/mo/i.test(txt) && /Gym/.test(txt) && /next/i.test(txt), 'Activity shows a Recurring card with monthly cost and next date');
