@@ -21,7 +21,7 @@ async function device(){
 }
 const A=await device(), p=A.p;
 // create book with a friend
-await p.click('.fab'); await p.fill('#bn','Goa trip'); await p.fill('#np','Ravi'); await p.click('[data-x=addp]'); await p.click('[data-x=save]');
+await p.click('.bk.new'); await p.fill('#bn','Goa trip'); await p.fill('#np','Ravi'); await p.click('[data-x=addp]'); await p.click('[data-x=save]');
 // add expense 100.01 split equally, paid by me (offline)
 await A.ctx.setOffline(true);
 await p.click('.fab'); await p.fill('#ed','Dinner'); await p.fill('#ea','100.01'); await p.click('[data-x=save]');

@@ -28,7 +28,7 @@ let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', 
   console.log('Data shape');
   const shape = await p.evaluate(() => ({ books: live('books').map(b => b.name), entries: live('entries').length, people: live('people').length }));
   console.log('  ', JSON.stringify(shape));
-  ok(shape.books.length === 6 && shape.entries > 100, 'six books and 100+ entries generated');
+  ok(shape.books.length === 7 && shape.entries > 150, 'six shared books + My money, 150+ entries generated');
   ok(await p.evaluate(() => { const r1 = JSON.stringify(S.doc.entries); const saved = JSON.parse(JSON.stringify(S.doc)); return typeof r1 === 'string' && saved; }), 'doc serialises');
 
   console.log('Money invariants');
@@ -36,14 +36,14 @@ let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', 
     const out = { badSum: [], nonInt: [], zeroNet: [], badSelf: [] };
     for (const e of live('entries')) {
       const sum = Object.values(e.split).reduce((a, c) => a + c, 0);
-      if (sum !== e.amount) out.badSum.push(e.desc + ' ' + sum + '/' + e.amount);
+      if (e.type !== 'income' && sum !== e.amount) out.badSum.push(e.desc + ' ' + sum + '/' + e.amount);
       if (![e.amount, ...Object.values(e.split)].every(Number.isInteger)) out.nonInt.push(e.desc);
       if (e.type === 'settle' && Object.keys(e.split)[0] === e.paidBy) out.badSelf.push(e.desc);
     }
     for (const b of live('books')) { const net = netBalances(b.id); const s = Object.values(net).reduce((a, c) => a + c, 0); if (s !== 0) out.zeroNet.push(b.name + ' ' + s); }
     return out;
   });
-  ok(inv.badSum.length === 0, 'every entry: split sums exactly to amount ' + inv.badSum.join(';'));
+  ok(inv.badSum.length === 0, 'every expense/payment: split sums exactly to amount ' + inv.badSum.join(';'));
   ok(inv.nonInt.length === 0, 'all amounts are integer minor units');
   ok(inv.zeroNet.length === 0, 'balances in every book sum to zero ' + inv.zeroNet.join(';'));
   ok(inv.badSelf.length === 0, 'no payment from a person to themselves');
@@ -74,7 +74,7 @@ let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', 
     }
     return res;
   });
-  ok(settled.every(([, z]) => z), 'applying suggested payments settles all 6 books: ' + settled.map(s => s[0]).join(', '));
+  ok(settled.every(([, z]) => z), 'applying suggested payments settles every book: ' + settled.map(s => s[0]).join(', '));
   await p.evaluate(() => { for (const e of live('entries')) if (e.desc === 'Payment' && !isSample(e.id)) del('entries', e.id); });
 
   console.log('Every screen renders');
@@ -87,7 +87,7 @@ let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', 
   }
   await p.evaluate(() => { location.hash = ''; }); await p.waitForTimeout(30);
   if (/NaN|undefined|\[object/.test(await p.innerText('#app'))) bad.push('home');
-  ok(bad.length === 0 && p.errors.length === 0, 'no NaN/undefined/JS errors on home + 6 books × 3 tabs ' + bad.join(',') + p.errors.join(','));
+  ok(bad.length === 0 && p.errors.length === 0, 'no NaN/undefined/JS errors on home + every book × 3 tabs ' + bad.join(',') + p.errors.join(','));
 
   console.log('Edit round-trip (open every entry, save untouched)');
   const rt = await p.evaluate(async () => {
@@ -121,7 +121,7 @@ let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', 
   await p.evaluate(id => { del('entries', id); }, victim); await p.evaluate(() => sync(true)); await B.p.evaluate(() => sync(true));
   ok(await B.p.evaluate(id => !live('entries').some(e => e.id === id), victim), 'deletion propagates to the other device');
   await p.evaluate(() => clearSampleData()); await p.evaluate(() => sync(true)); await B.p.evaluate(() => sync(true));
-  ok((await cnt(B.p))[1] === 0 && (await cnt(B.p))[0] === 0, 'removing sample data propagates; no books or entries left');
+  ok((await cnt(B.p))[1] === 0 && (await cnt(B.p))[0] === 1, 'removing sample data propagates; only the built-in My money book remains');
   ok(B.p.errors.length === 0 && p.errors.length === 0, 'no JS errors during sync scenarios');
 
   console.log('Scale');

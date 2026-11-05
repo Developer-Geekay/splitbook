@@ -194,3 +194,18 @@ code{background:var(--soft);padding:1px 5px;border-radius:5px;font-size:12px}
 select{width:100%;padding:13px 14px;border-radius:14px;border:1.5px solid transparent;background:var(--card);box-shadow:var(--sh);outline:0}
 
 .loan .btns{flex-wrap:wrap}.loan .btns .btn{flex:1 1 auto;white-space:nowrap}
+
+/* My money */
+.mm{padding:14px 16px 14px;margin-bottom:12px}
+.mm-top{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left}.mm-top i{font-style:normal;font-size:22px;color:var(--muted)}
+.mm-t{font-weight:700;font-size:15px}.mm-t small{color:var(--muted);font-weight:500;margin-left:6px}
+.mm-n{font-size:32px;font-weight:800;letter-spacing:-.03em;margin-top:6px;font-variant-numeric:tabular-nums;color:var(--pos)}.mm-n.neg{color:var(--neg)}
+.mm-s{font-size:13px;color:var(--muted);margin-top:-2px}
+.mm-row{display:flex;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.mm-row>div{flex:1;font-size:12px;color:var(--muted)}.mm-row b{display:block;font-size:16px;color:var(--ink);margin-top:2px}
+.mm .btns{margin-top:12px}
+.mrow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}.mrow:last-child{border:0}
+.mrow>b{width:34px;font-size:13px}.mrow>span:not(.ci){min-width:88px;text-align:right;font-size:14px;font-weight:600}
+.bars{flex:1;display:grid;gap:3px}.bars i{display:block;height:6px;border-radius:9px;min-width:2px}.bars i.pos{background:var(--pos)}.bars i.neg{background:var(--neg)}
+.mrow.cat .ci{width:34px;height:34px;border-radius:11px;background:var(--soft);display:grid;place-items:center;font-size:17px}
+.mrow.cat .bar{margin-top:6px}
+.hero-row>div:nth-child(3){text-align:right}

@@ -76,6 +76,7 @@ function byWeights(total, weights) {
 function netBalances(bookId) {
   const net = {};
   for (const e of bookEntries(bookId)) {
+    if (e.type === 'income') continue;          // income is personal money in, not a debt between people
     net[e.paidBy] = (net[e.paidBy] || 0) + e.amount;
     for (const [p, c] of Object.entries(e.split)) net[p] = (net[p] || 0) - c;
   }
@@ -175,7 +176,7 @@ async function driveWrite(id, doc) {
 
 /* ───────────────────────── sync engine ───────────────────────── */
 let syncTimer = null, syncing = false;
-function scheduleSync() { clearTimeout(syncTimer); syncTimer = setTimeout(() => sync(false), 1500); }
+function scheduleSync() { clearTimeout(syncTimer); syncTimer = setTimeout(() => sync(false), 400); }
 async function sync(interactive) {
   if (syncing || !S.meta.wasSignedIn || !navigator.onLine) return;
   if (!interactive && !haveToken() && !S.meta.token) return;
@@ -188,11 +189,11 @@ async function sync(interactive) {
       catch (e) { if (/404/.test(e.message)) { S.meta.fileId = null; f = await driveFind(); remote = f ? await driveRead(f.id) : null; } else throw e; }
     }
     // Brand-new device: adopt remote wholesale instead of merging a pristine local doc.
-    const pristine = !live('books').length && !live('entries').length;
+    const pristine = !live('books').filter(b => !b.personal).length && !live('entries').length;
     if (remote && pristine) { for (const p of live('people')) if (p.isMe && !(remote.people && remote.people[p.id])) delete S.doc.people[p.id]; }
     const m = mergeDocs(S.doc, remote);
     S.doc = m.doc;
-    ensureMe();
+    ensureMe(); ensurePersonal();
     let id = f && f.id;
     if (!remote || m.remoteStale || S.meta.dirty) id = await driveWrite(id, S.doc);
     S.meta.fileId = id; S.meta.dirty = false; S.meta.lastSync = now();
@@ -207,6 +208,20 @@ function ensureMe() {
   const name = (S.meta.user && S.meta.user.given_name) || (S.meta.user && S.meta.user.name) || 'Me';
   const p = { id: uid(), name, isMe: true, createdAt: now() };
   S.doc.people[p.id] = { ...p, updatedAt: now() }; S.meta.dirty = true; persist();
+}
+/* "My money": a built-in single-person book for income & expenses. Fixed id → every device converges on the same one. */
+const PERSONAL_ID = 'my-money';
+const personalBook = () => { const b = S.doc.books[PERSONAL_ID]; return b && !b.deleted ? b : null; };
+function ensurePersonal() {
+  const m = me(); if (!m) return;
+  const b = S.doc.books[PERSONAL_ID];
+  if (!b) { S.doc.books[PERSONAL_ID] = { id: PERSONAL_ID, name: 'My money', emoji: '👛', currency: localeCurrency(), memberIds: [m.id], personal: true, createdAt: 1, updatedAt: 1 }; persist(); }
+  else if (!b.deleted && b.memberIds[0] !== m.id) b.memberIds = [m.id];     // follow this device's "me"
+}
+function monthStats(bookId, ym) {
+  let inc = 0, exp = 0;
+  for (const e of bookEntries(bookId)) { if (!e.date.startsWith(ym)) continue; if (e.type === 'income') inc += e.amount; else if (e.type === 'expense') exp += e.amount; }
+  return { inc, exp, net: inc - exp };
 }
 function statusInfo() {
   if (!S.meta.wasSignedIn) return { cls: '', text: 'Local only' };
@@ -298,6 +313,8 @@ const initials = n => (String(n).trim().split(/\s+/).map(w => w[0]).join('').sli
 const avatar = (id, cls = '') => { const p = person(id); return `<span class="av ${cls}" style="--h:${hueOf(id)}">${esc(initials(p ? p.name : '?'))}</span>`; };
 const avStack = ids => `<span class="avs">${ids.slice(0, 4).map(i => avatar(i, 'xs')).join('')}${ids.length > 4 ? `<span class="av xs more">+${ids.length - 4}</span>` : ''}</span>`;
 const CATS = [['🧾', 'Other'], ['🍽️', 'Food'], ['🛒', 'Groceries'], ['🚗', 'Transport'], ['🏠', 'Home'], ['🎬', 'Fun'], ['✈️', 'Travel'], ['💡', 'Bills'], ['🎁', 'Gift'], ['🏥', 'Health'], ['🔁', 'Subscription'], ['💸', 'Loan']];
+const INCOME_CATS = [['💼', 'Salary'], ['💻', 'Freelance'], ['📈', 'Investing'], ['🎁', 'Gift'], ['↩️', 'Refund'], ['➕', 'Other']];
+const catName = c => (CATS.concat(INCOME_CATS).find(([k]) => k === c) || [])[1] || '';
 const symbol = cur => { try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).formatToParts(0).find(p => p.type === 'currency').value; } catch { return cur; } };
 const ymd = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 const isoDay = d => ymd(new Date(d));
@@ -330,7 +347,12 @@ const statusPill = () => `<button class="pill" id="status" data-act="sync-now" a
 function render() {
   const app = $('#app'); if (!app) return;
   if (!me()) ensureMe();
-  app.innerHTML = S.ui.view === 'book' ? bookView() : homeView();
+  if (S.ui.view === 'book') {                       // book deleted here or on another device → go home
+    const bk = S.doc.books[S.ui.bookId];
+    if (!bk || bk.deleted) { S.ui.view = 'home'; S.ui.bookId = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); }
+  }
+  try { const pb = S.ui.view === 'book' && S.doc.books[S.ui.bookId]; app.innerHTML = pb ? (pb.personal ? personalView(pb) : bookView()) : homeView(); }
+  catch (e) { console.error('render', e); app.innerHTML = `<div class="empty"><div class="ico">⚠️</div><b>Something went wrong</b><p>Your data is safe on this device.</p><button class="btn sm" onclick="location.hash='';location.reload()">Reload</button></div>`; }
   paintStatus();
 }
 const money = (v, cur, signed) => (signed && v > 0 ? '+' : '') + fmt(v, cur).replace(/^-/, '−');
@@ -341,9 +363,10 @@ const whoName = id => (me() && id === me().id) ? 'you' : pname(id);
 function recurringBlock(b) {
   const ts = live('entries').filter(e => e.bookId === b.id && e.repeat && PERIOD[e.repeat]);
   if (!ts.length) return '';
-  const monthly = Math.round(ts.reduce((s, t) => s + perMonth(t), 0));
-  return `<div class="sec-h">Recurring · ${fmt(monthly, b.currency)}/mo</div>` + ts.map(t => `<button class="tx rec" data-act="edit-entry" data-id="${t.id}"><span class="tx-ico">🔁</span>
-    <span class="tx-mid"><b>${esc(t.desc)}</b><small>Every ${PERIOD[t.repeat]} · next ${shortDate(nextDue(t))}</small></span><span class="tx-end"><b>${fmt(t.amount, b.currency)}</b><small>${esc(pname(t.paidBy))} pays</small></span></button>`).join('') + `<div class="sec-h">Activity</div>`;
+  const sum = f => Math.round(ts.filter(f).reduce((s, t) => s + perMonth(t), 0)), inc = sum(t => t.type === 'income'), exp = sum(t => t.type !== 'income');
+  const parts = []; if (inc) parts.push('+' + fmt(inc, b.currency)); if (exp || !inc) parts.push((inc ? '−' : '') + fmt(exp, b.currency));
+  return `<div class="sec-h">Recurring · ${parts.join(' · ')}/mo</div>` + ts.map(t => `<button class="tx rec" data-act="edit-entry" data-id="${t.id}"><span class="tx-ico">${t.type === 'income' ? esc(t.cat || '💼') : '🔁'}</span>
+    <span class="tx-mid"><b>${esc(t.desc)}</b><small>Every ${PERIOD[t.repeat]} · next ${shortDate(nextDue(t))}</small></span><span class="tx-end">${t.type === 'income' ? `<b class="pos">+${fmt(t.amount, b.currency)}</b><small>income</small>` : `<b>${fmt(t.amount, b.currency)}</b><small>${b.personal ? 'expense' : esc(pname(t.paidBy)) + ' pays'}</small>`}</span></button>`).join('') + `<div class="sec-h">Activity</div>`;
 }
 function loansBlock(b) {
   const rs = loanReport(b.id), cur = b.currency; if (!rs.length) return '';
@@ -366,8 +389,16 @@ function dueBanner() {
   return `<button class="banner due" data-act="open-loans" data-id="${b.id}"><span>⏰</span><span><b>${r.lender === m.id ? esc(pname(r.borrower)) + '’s loan' : 'Your loan'} ${when}</b><small>${fmt(r.out + r.intDebt, b.currency)} · ${esc(b.name)}</small></span><i>›</i></button>`;
 }
 
+function myMoneyCard(pb) {
+  if (!pb) return '';
+  const cur = pb.currency, ym = isoDay(Date.now()).slice(0, 7), st = monthStats(pb.id, ym);
+  return `<section class="card mm"><button class="mm-top" data-act="open-personal"><span class="mm-t">👛 My money <small>${new Date().toLocaleDateString(undefined, { month: 'long' })}</small></span><i>›</i></button>
+    <div class="mm-n ${st.net < 0 ? 'neg' : ''}">${money(st.net, cur, true)}</div><div class="mm-s">left this month</div>
+    <div class="mm-row"><div><span class="dot pos"></span>Income<b>${fmt(st.inc, cur)}</b></div><div><span class="dot neg"></span>Spent<b>${fmt(st.exp, cur)}</b></div></div>
+    <div class="btns two"><button class="btn" data-act="add-income">＋ Income</button><button class="btn" data-act="add-expense">− Expense</button></div></section>`;
+}
 function homeView() {
-  const m = me(), books = live('books').sort((a, b) => b.updatedAt - a.updatedAt), tot = {};
+  const m = me(), books = live('books').filter(b => !b.personal).sort((a, b) => b.updatedAt - a.updatedAt), tot = {}, pb = personalBook();
   const cards = books.map(b => {
     const net = netBalances(b.id), mine = m ? (net[m.id] || 0) : 0;
     (tot[b.currency] = tot[b.currency] || { owed: 0, owe: 0 })[mine > 0 ? 'owed' : 'owe'] += Math.abs(mine);
@@ -384,19 +415,55 @@ function homeView() {
       <div class="hero-s">${n0 === 0 ? 'You are all settled up' : n0 > 0 ? 'in your favour across all books' : 'you owe across all books'}${cur.slice(1).map(c => ` · ${money(netOf(c), c, true)}`).join('')}</div>
       <div class="hero-row"><div><span class="dot pos"></span>Owed to you${cur.filter(c => tot[c].owed).map(c => `<b>${fmt(tot[c].owed, c)}</b>`).join('') || '<b>—</b>'}</div>
       <div><span class="dot neg"></span>You owe${cur.filter(c => tot[c].owe).map(c => `<b>${fmt(tot[c].owe, c)}</b>`).join('') || '<b>—</b>'}</div></div></section>`;
-  })() : `<section class="hero welcome"><div class="hero-l">Welcome to SplitBook</div><div class="hero-t">Track shared money,<br>without the awkwardness.</div>
-      <ol class="steps"><li><i>1</i>Create a book for a trip, home or group</li><li><i>2</i>Add expenses — split in one tap</li><li><i>3</i>See who owes who and settle up</li></ol>
+  })() : (pb && bookEntries(PERSONAL_ID).length) ? '' : `<section class="hero welcome"><div class="hero-l">Welcome to SplitBook</div><div class="hero-t">Your money,<br>on your own terms.</div>
+      <ol class="steps"><li><i>1</i>Add income &amp; expenses to <b>My money</b></li><li><i>2</i>Make a book to split costs with others</li><li><i>3</i>See who owes who and settle up</li></ol>
       ${(!m || m.name === 'Me') ? `<input id="wn" class="wn" placeholder="Your name (optional)" maxlength="40" autocomplete="given-name">` : ''}</section>`;
   const backup = (S.meta.wasSignedIn || !clientId()) ? '' : `<button class="banner" data-act="settings"><span>☁️</span><span><b>Back up to Google Drive</b><small>Sync across devices. Works offline.</small></span><i>›</i></button>`;
   const name = (m && m.name !== 'Me' && m.name) || '';
   return `<header class="top"><div>${name ? `<small>Hi,</small><h1>${esc(name)} 👋</h1>` : `<h1>Welcome 👋</h1>`}</div>${statusPill()}
       <button class="iconbtn" data-act="settings" aria-label="Settings">${m ? avatar(m.id) : '⚙️'}</button></header>
-    <main>${hero}${dueBanner()}${backup}${books.length ? `<div class="sec-h">Your books</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>New book</b></span></button></div>` : ''}</main>
-    <button class="fab ${books.length ? '' : 'wide'}" data-act="${books.length ? 'quick-add' : 'new-book'}" aria-label="${books.length ? 'Add expense' : 'New book'}"><i>＋</i><span>${books.length ? 'Add expense' : 'Create your first book'}</span></button>`;
+    <main>${hero}${myMoneyCard(pb)}${dueBanner()}${backup}<div class="sec-h">Shared books</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>${books.length ? 'New book' : 'New shared book'}</b>${books.length ? '' : '<small class="muted">Split costs with friends, a trip, your flat…</small>'}</span></button></div></main>
+    <button class="fab" data-act="quick-add" aria-label="Add"><i>＋</i><span>Add</span></button>`;
+}
+
+function personalView(b) {
+  const cur = b.currency, tab = S.ui.tab === 'summary' ? 'summary' : 'entries', es = bookEntries(b.id);
+  const ym = isoDay(Date.now()).slice(0, 7), st = monthStats(b.id, ym);
+  const balance = es.reduce((s, e) => s + (e.type === 'income' ? e.amount : e.type === 'expense' ? -e.amount : 0), 0);
+  const hero = `<section class="hero compact"><div class="hero-l">${new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</div>
+    <div class="hero-n ${st.net < 0 ? 'neg' : ''}">${money(st.net, cur, true)}</div><div class="hero-s">income minus spending this month</div>
+    <div class="hero-row"><div><span class="dot pos"></span>Income<b>${fmt(st.inc, cur)}</b></div><div><span class="dot neg"></span>Spent<b>${fmt(st.exp, cur)}</b></div><div>All-time<b>${money(balance, cur)}</b></div></div></section>`;
+  const tabs = [['entries', 'Activity'], ['summary', 'Summary']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${l}</button>`).join('');
+  let body = '';
+  if (tab === 'entries') {
+    let last = '';
+    body = es.length ? es.slice(0, S.ui.limit).map(e => {
+      const day = dayLabel(e.date), head = day !== last ? `<div class="day">${day}</div>` : ''; last = day;
+      const inc = e.type === 'income';
+      return head + `<button class="tx" data-act="edit-entry" data-id="${e.id}"><span class="tx-ico ${inc ? 'pay' : ''}">${esc(e.cat || (inc ? '💼' : '🧾'))}</span>
+        <span class="tx-mid"><b>${esc(e.desc || (inc ? 'Income' : 'Expense'))}</b><small>${esc(catName(e.cat) || (inc ? 'Income' : 'Expense'))}${e.fromRule || e.repeat ? ' · 🔁' : ''}</small></span>
+        <span class="tx-end"><b class="${inc ? 'pos' : 'neg'}">${inc ? '+' : '−'}${fmt(e.amount, cur)}</b></span></button>`;
+    }).join('') + (es.length > S.ui.limit ? `<button class="btn more" data-act="more">Show older · ${es.length - S.ui.limit} more</button>` : '')
+      : `<div class="empty"><div class="ico">👛</div><b>Nothing here yet</b><p>Record your first income or expense.</p><div class="btns two"><button class="btn sm" data-act="add-income">＋ Income</button><button class="btn sm" data-act="add-expense">− Expense</button></div></div>`;
+    body = recurringBlock(b) + body;
+  } else {
+    const months = [];
+    for (let i = 5; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); const k = ymd(d).slice(0, 7); months.push({ k, label: d.toLocaleDateString(undefined, { month: 'short' }), ...monthStats(b.id, k) }); }
+    const max = Math.max(1, ...months.flatMap(m => [m.inc, m.exp]));
+    const cats = {}; es.filter(e => e.type === 'expense' && e.date.startsWith(ym)).forEach(e => { const k = catName(e.cat) || 'Other'; (cats[k] = cats[k] || { v: 0, ico: e.cat || '🧾' }).v += e.amount; });
+    const top = Object.entries(cats).sort((a, c) => c[1].v - a[1].v), tot = top.reduce((s, [, c]) => s + c.v, 0) || 1;
+    body = `<div class="sec-h">Last 6 months</div><div class="card pad">${months.map(m => `<div class="mrow"><b>${m.label}</b><div class="bars"><i class="pos" style="width:${m.inc / max * 100}%"></i><i class="neg" style="width:${m.exp / max * 100}%"></i></div><span class="${m.net < 0 ? 'neg' : m.net > 0 ? 'pos' : 'muted'}">${m.net ? money(m.net, cur, true) : '—'}</span></div>`).join('')}</div>
+      <div class="sec-h">Where it went this month</div>` + (top.length ? `<div class="card pad">${top.map(([name, c]) => `<div class="mrow cat"><span class="ci">${esc(c.ico)}</span><div class="grow"><div class="bal-top"><b>${esc(name)}</b><span>${fmt(c.v, cur)}</span></div><div class="bar"><i class="neg" style="width:${c.v / tot * 100}%"></i></div></div><small class="muted">${Math.round(c.v / tot * 100)}%</small></div>`).join('')}</div>`
+      : `<div class="empty small"><b>No spending yet this month</b></div>`);
+  }
+  return `<header class="top"><button class="iconbtn" data-act="back" aria-label="Back">‹</button><div class="grow"><h1>👛 My money</h1></div>${statusPill()}
+    <button class="iconbtn" data-act="settings" aria-label="Settings">⚙️</button></header>
+    <main>${hero}<div class="tabs" role="tablist">${tabs}</div>${body}</main>
+    <button class="fab" data-act="new-entry" aria-label="Add"><i>＋</i><span>Add</span></button>`;
 }
 
 function bookView() {
-  const b = S.doc.books[S.ui.bookId], tab = S.ui.tab, m = me(), cur = b.currency;
+  const b = S.doc.books[S.ui.bookId], m = me(), cur = b.currency, tab = ['entries', 'balances', 'members'].includes(S.ui.tab) ? S.ui.tab : 'entries';
   const net = netBalances(b.id), mine = m ? (net[m.id] || 0) : 0, es = bookEntries(b.id);
   const spent = es.filter(e => e.type !== 'settle').reduce((s, e) => s + e.amount, 0);
   const myShare = m ? es.filter(e => e.type !== 'settle').reduce((s, e) => s + (e.split[m.id] || 0), 0) : 0;
@@ -448,7 +515,7 @@ function openSheet(html) {
   o.addEventListener('pointerdown', e => { if (e.target === o) closeSheet(); });
   document.body.appendChild(o); document.body.classList.add('noscroll'); return o;
 }
-function closeSheet() { const o = $('.overlay'); if (o) { o.remove(); document.body.classList.remove('noscroll'); } }
+function closeSheet() { const o = $('.overlay'); if (o) { o.remove(); document.body.classList.remove('noscroll'); if (pendingReload) location.reload(); } }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 /* ---- book form ---- */
@@ -496,7 +563,7 @@ function entrySheet(entryId, preset, bookId) {
   let bid = ex ? ex.bookId : (bookId || S.ui.bookId || (live('books')[0] || {}).id);
   if (!bid) return toast('Create a book first');
   let b, cur, members;
-  const setBook = id => { bid = id; b = S.doc.books[id]; cur = b.currency; members = b.memberIds.filter(i => person(i) && !person(i).deleted); };
+  const setBook = id => { bid = id; b = S.doc.books[id]; cur = b.currency; members = b.personal ? [me().id] : b.memberIds.filter(i => person(i) && !person(i).deleted); };
   setBook(bid);
   const m = me();
   const defPayer = () => (m && members.includes(m.id)) ? m.id : members[0];
@@ -512,6 +579,7 @@ function entrySheet(entryId, preset, bookId) {
 
   function compute() {
     const total = amt();
+    if (b.personal) return { split: E.type === 'income' ? {} : { [members[0]]: total }, ok: total > 0 };
     if (E.type === 'settle') return { split: { [E.sel[0]]: total }, ok: !!E.sel[0] && E.sel[0] !== E.paidBy && total > 0 };
     if (!E.sel.length) return { split: {}, ok: false, msg: 'Pick at least one person' };
     if (E.method === 'equal') { const w = {}; E.sel.forEach(i => w[i] = 1); return { split: byWeights(total, w), ok: total > 0 }; }
@@ -536,28 +604,28 @@ function entrySheet(entryId, preset, bookId) {
       else if (E.method === 'equal' && E.sel.length && total) { h.textContent = `${fmt(Math.round(total / E.sel.length), cur)} each · ${E.sel.length} ${E.sel.length === 1 ? 'person' : 'people'}`; h.className = 'hint'; }
       else { h.textContent = ''; h.className = 'hint'; }
     }
-    const sb = $('#savebtn', root); if (sb) sb.textContent = (ex ? 'Save' : E.type === 'settle' ? 'Record payment' : isLoanForm() ? 'Add loan' : 'Add expense') + (total ? ` · ${fmt(total, cur)}` : '');
+    const sb = $('#savebtn', root); if (sb) sb.textContent = (ex ? 'Save' : E.type === 'settle' ? 'Record payment' : E.type === 'income' ? 'Add income' : isLoanForm() ? 'Add loan' : 'Add expense') + (total ? ` · ${fmt(total, cur)}` : '');
   }
   const pc = (id, on, x) => `<button class="pc ${on ? 'on' : ''}" data-x="${x}" data-v="${id}">${avatar(id, 'xs')}${esc(pname(id))}</button>`;
 
-  const isLoanForm = () => E.type === 'expense' && E.cat === '💸' && E.sel.length === 1 && E.sel[0] !== E.paidBy && !(ex && ex.interestFor);
+  const isLoanForm = () => !b.personal && E.type === 'expense' && E.cat === '💸' && E.sel.length === 1 && E.sel[0] !== E.paidBy && !(ex && ex.interestFor);
   function draw() {
-    const isS = E.type === 'settle', unit = E.method === 'percent' ? '%' : E.method === 'shares' ? '×' : cur;
-    const books = live('books');
-    root.innerHTML = `<div class="sh-head"><div class="seg2"><button data-x="type" data-v="expense" class="${!isS ? 'on' : ''}">Expense</button><button data-x="type" data-v="settle" class="${isS ? 'on' : ''}">Payment</button></div>
+    const isS = E.type === 'settle', isP = !!b.personal, isI = E.type === 'income', unit = E.method === 'percent' ? '%' : E.method === 'shares' ? '×' : cur;
+    const books = live('books').sort((x, y) => (y.personal ? 1 : 0) - (x.personal ? 1 : 0));
+    root.innerHTML = `<div class="sh-head"><div class="seg2"><button data-x="type" data-v="expense" class="${E.type === 'expense' ? 'on' : ''}">Expense</button><button data-x="type" data-v="${isP ? 'income' : 'settle'}" class="${E.type === (isP ? 'income' : 'settle') ? 'on' : ''}">${isP ? 'Income' : 'Payment'}</button></div>
         <button class="iconbtn" data-x="close" aria-label="Close">✕</button></div>
       ${!ex && books.length > 1 ? `<div class="pcs scroll">${books.map(k => `<button class="pc ${k.id === bid ? 'on' : ''}" data-x="book" data-v="${k.id}">${esc(k.emoji || '📒')} ${esc(k.name)}</button>`).join('')}</div>` : ''}
       <div class="amt"><span class="cur">${esc(symbol(cur))}</span><input id="ea" inputmode="decimal" autocomplete="off" value="${esc(E.amount)}" placeholder="0"></div>
-      ${isS ? '' : `<input id="ed" class="desc" value="${esc(E.desc)}" placeholder="What was it for?" maxlength="80" autocomplete="off">
-      <div class="cats">${CATS.map(([c, l]) => `<button data-x="cat" data-v="${c}" data-l="${l}" class="${E.cat === c ? 'on' : ''}"><i>${c}</i>${l}</button>`).join('')}</div>`}
-      <div class="lbl">${isS ? 'Who paid?' : 'Paid by'}</div><div class="pcs scroll">${members.map(i => pc(i, i === E.paidBy, 'paid')).join('')}</div>
+      ${isS ? '' : `<input id="ed" class="desc" value="${esc(E.desc)}" placeholder="${isI ? 'Where from?' : 'What was it for?'}" maxlength="80" autocomplete="off">
+      <div class="cats">${(isI ? INCOME_CATS : CATS).map(([c, l]) => `<button data-x="cat" data-v="${c}" data-l="${l}" class="${E.cat === c ? 'on' : ''}"><i>${c}</i>${l}</button>`).join('')}</div>`}
+      ${isP ? '' : `      <div class="lbl">${isS ? 'Who paid?' : 'Paid by'}</div><div class="pcs scroll">${members.map(i => pc(i, i === E.paidBy, 'paid')).join('')}</div>
       ${isS ? `<div class="lbl">Paid to</div><div class="pcs scroll">${members.filter(i => i !== E.paidBy).map(i => pc(i, i === E.sel[0], 'to')).join('')}</div>` :
       `<div class="lbl">${E.cat === '💸' ? 'Lent to' : 'Split between'} <button class="link" data-x="all">${E.sel.length === members.length ? 'Clear' : 'Everyone'}</button></div>
       ${E.custom ? `<div class="seg">${[['equal', 'Equal'], ['exact', 'Exact'], ['percent', '%'], ['shares', 'Shares']].map(([k, l]) => `<button data-x="method" data-v="${k}" class="${E.method === k ? 'on' : ''}">${l}</button>`).join('')}</div>
         <div class="card pad">${members.map(i => `<div class="who"><label>${avatar(i, 'xs')}<input type="checkbox" data-x="sel" data-v="${i}" ${E.sel.includes(i) ? 'checked' : ''}><span>${esc(pname(i))}</span></label>
           ${E.method !== 'equal' && E.sel.includes(i) ? `<input class="val" data-val="${i}" inputmode="decimal" value="${esc(E.vals[i] ?? '')}" placeholder="${unit}">` : ''}<span class="calc" data-calc="${i}"></span></div>`).join('')}</div>` :
         `<div class="pcs">${members.map(i => pc(i, E.sel.includes(i), 'tog')).join('')}</div>`}
-      <div class="split-foot"><span id="hint" class="hint"></span><button class="link" data-x="custom">${E.custom ? 'Simple split' : 'Customize split'}</button></div>`}
+      <div class="split-foot"><span id="hint" class="hint"></span><button class="link" data-x="custom">${E.custom ? 'Simple split' : 'Customize split'}</button></div>`}`}
       <div class="row2"><label class="field"><span>Date</span><input id="edt" type="date" value="${E.date}"></label>
         ${isS ? '' : `<label class="field grow"><span>Note</span><input id="en" value="${esc(E.note)}" placeholder="Optional" maxlength="300"></label>`}</div>
       ${isS ? '' : `${isLoanForm() ? `<div class="loanbox"><div class="lbl">Loan terms <small>optional</small></div><div class="row2"><label class="field"><span>Interest % / year</span><input id="elr" inputmode="decimal" value="${esc(E.rate)}" placeholder="0"></label>
@@ -584,8 +652,8 @@ function entrySheet(entryId, preset, bookId) {
     const t = e.target.closest('[data-x]'); if (!t || t.tagName === 'INPUT') return;
     const x = t.dataset.x, v = t.dataset.v; pull();
     if (x === 'close') closeSheet();
-    else if (x === 'type') { E.type = v; E.sel = v === 'settle' ? [members.find(i => i !== E.paidBy)].filter(Boolean) : [...members]; draw(); }
-    else if (x === 'book') { setBook(v); E.paidBy = defPayer(); E.sel = [...members]; E.vals = {}; draw(); }
+    else if (x === 'type') { E.type = v; E.sel = v === 'settle' ? [members.find(i => i !== E.paidBy)].filter(Boolean) : [...members]; if (v === 'income') E.cat = '💼'; else if (INCOME_CATS.some(([k]) => k === E.cat) && E.cat !== '🎁') E.cat = '🧾'; draw(); }
+    else if (x === 'book') { setBook(v); E.paidBy = defPayer(); E.sel = [...members]; E.vals = {}; if (b.personal && E.type === 'settle') E.type = 'expense'; if (!b.personal && E.type === 'income') { E.type = 'expense'; E.cat = '🧾'; } draw(); }
     else if (x === 'cat') { E.cat = v; if (!E.desc.trim()) E.desc = t.dataset.l === 'Other' ? '' : t.dataset.l; if (v === '💸' && !ex && E.sel.length !== 1) E.sel = [members.find(i => i !== E.paidBy)].filter(Boolean); draw(); $('#ed', root).focus(); }
     else if (x === 'paid') { E.paidBy = v; if (E.type === 'settle' && E.sel[0] === v) E.sel = [members.find(i => i !== v)]; draw(); }
     else if (x === 'to') { E.sel = [v]; draw(); }
@@ -600,8 +668,8 @@ function entrySheet(entryId, preset, bookId) {
       if (E.type === 'settle' && !c.ok) return toast('Choose who paid whom');
       if (!c.ok) return toast(c.msg || 'Check the split');
       const vals = (E.method === 'percent' || E.method === 'shares') ? Object.fromEntries(E.sel.map(i => [i, E.vals[i]])) : undefined;
-      const isS = E.type === 'settle', catLabel = (CATS.find(([c0]) => c0 === E.cat) || [])[1];
-      const entry = { id: ex ? ex.id : uid(), bookId: bid, type: E.type, desc: isS ? 'Payment' : (E.desc.trim() || catLabel || 'Expense'), amount: total, paidBy: E.paidBy,
+      const isS = E.type === 'settle', catLabel = catName(E.cat);
+      const entry = { id: ex ? ex.id : uid(), bookId: bid, type: E.type, desc: isS ? 'Payment' : (E.desc.trim() || catLabel || (E.type === 'income' ? 'Income' : 'Expense')), amount: total, paidBy: E.paidBy,
         split: Object.fromEntries(Object.entries(c.split).filter(([, n]) => n > 0 || isS)), method: isS ? 'exact' : E.method, vals,
         date: E.date, cat: E.cat, note: E.note.trim(), createdAt: ex ? ex.createdAt : now() };
       if (!isS) {
@@ -612,12 +680,13 @@ function entrySheet(entryId, preset, bookId) {
       if (ex && ex.fromRule) entry.fromRule = ex.fromRule;
       if (ex && ex.interestFor) entry.interestFor = ex.interestFor;
       put('entries', entry); materializeRecurring(); buzz(); closeSheet();
-      if (S.ui.bookId !== bid) go('book/' + bid);
-      toast(ex ? 'Entry updated' : isS ? 'Payment recorded' : 'Expense added');
+      try { localStorage.setItem('sb.last', bid); } catch {}
+      if (S.ui.view === 'book' && S.ui.bookId !== bid) go('book/' + bid);
+      toast(ex ? 'Entry updated' : isS ? 'Payment recorded' : E.type === 'income' ? 'Income added' : 'Expense added');
     }
   });
   draw();
-  if (!ex && !preset) setTimeout(() => { const a = $('#ea', root); a && a.focus(); }, 80);
+  if (!ex && !(preset && preset.type === 'settle')) setTimeout(() => { const a = $('#ea', root); a && a.focus(); }, 80);
 }
 
 /* ---- settings ---- */
@@ -632,11 +701,13 @@ function settingsSheet() {
       ${clientId() ? `<button class="cta" data-x="in">Continue with Google</button>` : `<p class="note">Google backup isn't enabled for this app yet. Everything still works and is saved on this device.</p>`}`}</div>
     <div class="lbl">Your name</div>
     <div class="addrow"><input id="myname" value="${esc((m || {}).name || '')}"><button class="btn" data-x="savename">Save</button></div>
+    ${personalBook() ? `<div class="lbl">My money currency</div><select id="pcur">${[...new Set([personalBook().currency, ...CURRENCIES])].map(c => `<option ${c === personalBook().currency ? 'selected' : ''}>${c}</option>`).join('')}</select><p class="note">Changes the symbol only — amounts are not converted.</p>` : ''}
     <div class="lbl">Demo</div>
     <div class="card pad"><p class="note">Fill the app with realistic example books — daily spends, a trip, rent &amp; bills, subscriptions, loans and a EUR weekend — to see how everything works.</p>
       <div class="btns two" style="margin:8px 0"><button class="btn" data-x="${hasSample() ? 'sample-clear' : 'sample-load'}">${hasSample() ? 'Remove sample data' : 'Load sample data'}</button></div></div>
     <div class="lbl">Backup</div><div class="btns two"><button class="btn" data-x="export">Export</button><button class="btn" data-x="import">Import</button></div>
     <p class="note c">SplitBook · works offline · installable</p>`);
+  o.addEventListener('change', e => { if (e.target.id === 'pcur' && personalBook()) { put('books', { ...personalBook(), currency: e.target.value }); toast('Currency updated'); } });
   o.addEventListener('click', async e => {
     const x = e.target.closest('[data-x]')?.dataset.x; if (!x) return;
     if (x === 'close') closeSheet();
@@ -660,7 +731,7 @@ function settingsSheet() {
 
 /* ---- sample data (demo / testing) ---- */
 const isSample = id => String(id).startsWith('smp-');
-const hasSample = () => Object.values(S.doc.books).some(b => !b.deleted && isSample(b.id));
+const hasSample = () => Object.values(S.doc.books).some(b => !b.deleted && isSample(b.id)) || Object.values(S.doc.entries).some(e => !e.deleted && isSample(e.id));
 function loadSampleData(seed = 7) {
   let a = seed >>> 0;
   const rnd = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -693,10 +764,23 @@ function loadSampleData(seed = 7) {
   const rec = (bk, d, desc, cat, amount, paidBy, spec, period) => { exp(bk, d, desc, cat, amount, paidBy, spec); S.doc.entries['smp-e-' + (seq - 1)].repeat = period; };
   const both = [P.me, P.ravi];
 
-  // 1) Daily life — small everyday spends, shared / personal / paid-for-the-other
-  const daily = mkBook('daily', 'Daily life', '🍵', 'INR', both);
   const things = [['Chai & snacks', '🍽️', 40, 120], ['Auto / cab', '🚗', 60, 350], ['Lunch', '🍽️', 120, 450], ['Groceries', '🛒', 200, 1500],
     ['Dinner out', '🍽️', 300, 1200], ['Coffee', '🍽️', 90, 260], ['Pharmacy', '🏥', 80, 600], ['Movie', '🎬', 250, 800]];
+  // 0) My money — salary, freelance, rent, bills and everyday spending (no book, no people)
+  ensurePersonal();
+  const PB = PERSONAL_ID, pinc = (d, desc, cat, amount, period) => {
+    const id = 'smp-e-' + (seq++), total = Math.round(amount * factor(S.doc.books[PB].currency));
+    S.doc.entries[id] = { id, bookId: PB, type: 'income', desc, amount: total, paidBy: P.me, split: {}, method: 'equal', date: day(d), cat, note: '', createdAt: t0 + seq, updatedAt: t0 };
+    if (period) S.doc.entries[id].repeat = period;
+  };
+  const pexp = (d, desc, cat, amount, period) => { exp(PB, d, desc, cat, amount, P.me, [P.me]); if (period) S.doc.entries['smp-e-' + (seq - 1)].repeat = period; };
+  pinc(80, 'Salary', '💼', 85000, 'monthly'); pinc(52, 'Freelance project', '💻', 12000); pinc(21, 'Interest', '📈', 640); pinc(12, 'Amazon refund', '↩️', 1299);
+  pexp(78, 'House rent', '🏠', 22000, 'monthly'); pexp(77, 'Phone & internet', '💡', 599, 'monthly'); pexp(75, 'Gym', '🎬', 1500, 'monthly'); pexp(74, 'Electricity', '💡', 1850, 'monthly');
+  for (let d = 70; d >= 0; d -= 2) { const [desc, cat, lo, hi] = things[Math.floor(rnd() * things.length)]; pexp(d, desc, cat, Math.round(between(lo, hi)), null); }
+  pexp(33, 'New headphones', '🎁', 6499, null); pexp(9, 'Flight tickets', '✈️', 8800, null);
+
+  // 1) Daily life — small everyday spends, shared / personal / paid-for-the-other
+  const daily = mkBook('daily', 'Daily life', '🍵', 'INR', both);
   for (let d = 29; d >= 0; d--) for (let k = 0, n = 1 + Math.floor(rnd() * 3); k < n; k++) {
     const [desc, cat, lo, hi] = things[Math.floor(rnd() * things.length)];
     const amt = Math.round(between(lo, hi)) + (rnd() < .3 ? .5 : 0), payer = rnd() < .55 ? P.me : P.ravi, other = payer === P.me ? P.ravi : P.me, r = rnd();
@@ -778,13 +862,18 @@ document.addEventListener('click', e => {
   else if (a === 'more') { S.ui.limit += 40; render(); }
   else if (a === 'tab') { S.ui.tab = d.tab; render(); }
   else if (a === 'new-entry') entrySheet();
-  else if (a === 'quick-add') entrySheet(null, null, (live('books').sort((x, y) => y.updatedAt - x.updatedAt)[0] || {}).id);
+  else if (a === 'quick-add') { let last = null; try { last = localStorage.getItem('sb.last'); } catch {} const lb = last && S.doc.books[last]; entrySheet(null, null, lb && !lb.deleted ? last : PERSONAL_ID); }
+  else if (a === 'open-personal') { S.ui.tab = 'entries'; S.ui.limit = 40; go('book/' + PERSONAL_ID); }
+  else if (a === 'add-income') entrySheet(null, { type: 'income', cat: '💼' }, PERSONAL_ID);
+  else if (a === 'add-expense') entrySheet(null, null, PERSONAL_ID);
   else if (a === 'edit-entry') entrySheet(d.id);
   else if (a === 'edit-book') bookSheet(S.ui.bookId);
   else if (a === 'del-book') {
     if (!confirm('Delete this book and all its entries?')) return;
-    const id = S.ui.bookId, old = S.doc.books[id], ens = bookEntries(id);
-    ens.forEach(en => del('entries', en.id)); del('books', id); go('');
+    const id = S.ui.bookId, old = S.doc.books[id], ens = bookEntries(id), t = now();
+    ens.forEach(en => { S.doc.entries[en.id] = { id: en.id, deleted: true, updatedAt: t, bookId: id }; });
+    S.doc.books[id] = { id, deleted: true, updatedAt: t };
+    S.ui.view = 'home'; S.ui.bookId = null; history.replaceState(null, '', location.pathname + location.search); touched();
     toast('Book deleted', () => { put('books', old); ens.forEach(en => put('entries', en)); toast('Restored'); });
   }
   else if (a === 'settle') {
@@ -810,10 +899,23 @@ window.addEventListener('hashchange', route);
 window.addEventListener('online', () => { render(); sync(false); });
 window.addEventListener('offline', () => { render(); toast('Offline — everything is saved on this device'); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { materializeRecurring(); sync(false); } });
-setInterval(() => { if (!document.hidden) { materializeRecurring(); sync(false); } }, 60000);
+setInterval(() => { if (!document.hidden) { materializeRecurring(); sync(false); } }, 15000);
+window.addEventListener('focus', () => sync(false));
 window.addEventListener('storage', e => { if (e.key === 'sb.doc') { S.doc = jget('sb.doc', S.doc); render(); } });
 
 /* ───────────────────────── boot ───────────────────────── */
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(e => console.warn('sw', e));
-ensureMe(); route(); materializeRecurring();
+let pendingReload = false;
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller; let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;               // first install: nothing to refresh
+    if ($('.overlay')) { pendingReload = true; return; }   // don't interrupt an open form
+    reloading = true; location.reload();
+  });
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch(e => console.warn('sw', e));
+}
+ensureMe(); ensurePersonal(); route(); materializeRecurring();
 if (S.meta.wasSignedIn) sync(false);
