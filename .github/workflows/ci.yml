@@ -1,0 +1,54 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+      - run: npm test
+
+  deploy:
+    # Publishes to https://<user>.github.io/<repo>/ — only from main.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build site (inject Google Client ID + cache version)
+        env:
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+        run: |
+          mkdir _site
+          cp -r index.html app.js styles.css sw.js \
+                manifest.webmanifest icons _site/
+          printf 'window.SPLITBOOK_CONFIG = { GOOGLE_CLIENT_ID: "%s" };\n' "$GOOGLE_CLIENT_ID" > _site/config.js
+          sed -i "s/splitbook-v1/splitbook-${GITHUB_SHA::8}/" _site/sw.js
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

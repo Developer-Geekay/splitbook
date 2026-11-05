@@ -1,0 +1,11 @@
+{
+  "name": "splitbook",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node tests/serve.js",
+    "check": "node --check app.js && node --check sw.js",
+    "test": "node tests/e2e.test.js"
+  },
+  "devDependencies": { "playwright": "^1.48.0" }
+}
