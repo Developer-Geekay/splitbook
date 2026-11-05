@@ -197,7 +197,7 @@ async function sync(interactive) {
     if (!remote || m.remoteStale || S.meta.dirty) id = await driveWrite(id, S.doc);
     S.meta.fileId = id; S.meta.dirty = false; S.meta.lastSync = now();
     S.sync = { state: 'idle', error: '' };
-    persist(); render();
+    persist(); render(); materializeRecurring();
   } catch (e) {
     S.sync = { state: 'err', error: e.message }; console.warn('sync', e); paintStatus();
   } finally { syncing = false; }
@@ -218,6 +218,79 @@ function statusInfo() {
 }
 function paintStatus() { const el = $('#status'); if (!el) return; const s = statusInfo(); el.title = s.text; el.innerHTML = `<span class="sync-dot ${s.cls}"></span><span class="st-t">${s.text}</span>`; }
 
+
+/* ───────────────────────── recurring entries ───────────────────────── */
+/* A template is an ordinary entry with `repeat`. Occurrences get deterministic ids (`<template>~<date>`) so every
+   device that generates them produces the same record and merging never duplicates. */
+function nthOccurrence(t, i) {
+  const [y, m, d] = t.date.split('-').map(Number);
+  if (t.repeat === 'weekly') return ymd(new Date(y, m - 1, d + 7 * i));
+  let Y = y, M = m - 1;
+  if (t.repeat === 'yearly') Y = y + i; else { M = m - 1 + i; Y = y + Math.floor(M / 12); M = ((M % 12) + 12) % 12; }
+  return ymd(new Date(Y, M, Math.min(d, new Date(Y, M + 1, 0).getDate())));   // 31 Jan → 28/29 Feb → 31 Mar
+}
+function occurrences(t, until) {
+  const out = []; for (let i = 1; i <= 800; i++) { const d = nthOccurrence(t, i); if (d > until) break; out.push(d); } return out;
+}
+function nextDue(t, from = isoDay(Date.now())) {
+  for (let i = 1; i <= 800; i++) { const d = nthOccurrence(t, i); if (d > from) return d; } return null;
+}
+const PERIOD = { weekly: 'week', monthly: 'month', yearly: 'year' };
+const perMonth = t => t.amount * (t.repeat === 'weekly' ? 52 / 12 : t.repeat === 'yearly' ? 1 / 12 : 1);
+function materializeRecurring() {
+  const today = isoDay(Date.now()); let n = 0;
+  for (const t of live('entries').filter(e => e.repeat && PERIOD[e.repeat])) {
+    for (const date of occurrences(t, today)) {
+      const id = t.id + '~' + date;
+      if (S.doc.entries[id]) continue;                       // exists, or was deleted (tombstone) → never resurrect
+      const ms = new Date(date + 'T00:00').getTime(), c = { ...t, id, date, fromRule: t.id, createdAt: ms, updatedAt: ms };
+      delete c.repeat; S.doc.entries[id] = c; n++;           // old updatedAt: any real edit elsewhere wins the merge
+    }
+  }
+  if (n) { S.meta.dirty = true; persist(); render(); scheduleSync(); }
+  return n;
+}
+
+/* ───────────────────────── loans: principal, repayments, simple interest ───────────────────────── */
+const isLoan = e => e.type === 'expense' && e.cat === '💸' && !e.interestFor && Object.keys(e.split).length === 1 && Object.keys(e.split)[0] !== e.paidBy;
+/* Repayments (payments borrower→lender) clear charged interest first, then principal, oldest loan first.
+   Interest is simple, per year, on the outstanding principal; it only changes balances once you "add it". */
+function loanReport(bookId, asOf = isoDay(Date.now())) {
+  const es = bookEntries(bookId), loans = es.filter(isLoan), pairs = {}, out = [];
+  loans.forEach(l => (pairs[l.paidBy + '>' + Object.keys(l.split)[0]] = pairs[l.paidBy + '>' + Object.keys(l.split)[0]] || []).push(l));
+  for (const [k, ls] of Object.entries(pairs)) {
+    const [lender, borrower] = k.split('>'), ev = [];
+    ls.forEach(l => ev.push({ t: 'loan', date: l.date, o: 0, e: l }));
+    es.filter(e => e.interestFor && ls.some(l => l.id === e.interestFor)).forEach(e => ev.push({ t: 'charge', date: e.date, o: 1, e }));
+    es.filter(e => e.type === 'settle' && e.paidBy === borrower && Object.keys(e.split).length === 1 && e.split[lender] !== undefined).forEach(e => ev.push({ t: 'repay', date: e.date, o: 2, e }));
+    ev.sort((a, b) => a.date.localeCompare(b.date) || a.o - b.o || a.e.createdAt - b.e.createdAt);
+    const st = {}, order = [];
+    const accrue = date => { for (const id of order) { const s = st[id]; if (date > s.last) { s.acc += s.out * (s.rate / 100) * daysBetween(s.last, date) / 365; s.last = date; } } };
+    for (const x of ev) {
+      accrue(x.date);
+      if (x.t === 'loan') { st[x.e.id] = { l: x.e, out: x.e.amount, intDebt: 0, charged: 0, repaid: 0, acc: 0, last: x.date, rate: (x.e.loan && +x.e.loan.rate) || 0 }; order.push(x.e.id); }
+      else if (x.t === 'charge') { const s = st[x.e.interestFor]; if (s) { s.charged += x.e.amount; s.intDebt += x.e.amount; } }
+      else { let amt = x.e.amount; for (const id of order) { const s = st[id]; if (!amt) break;
+        const pi = Math.min(s.intDebt, amt); s.intDebt -= pi; amt -= pi; const pp = Math.min(s.out, amt); s.out -= pp; amt -= pp; s.repaid += pi + pp; } }
+    }
+    accrue(asOf);
+    for (const id of order) {
+      const s = st[id], due = (s.l.loan && s.l.loan.due) || '', accrued = Math.round(s.acc), pending = Math.max(0, accrued - s.charged);
+      const daysLeft = due ? daysBetween(asOf, due) : null, settled = s.out === 0 && s.intDebt === 0 && pending === 0;
+      out.push({ id, entry: s.l, lender, borrower, principal: s.l.amount, repaid: s.repaid, out: s.out, rate: s.rate, accrued, charged: s.charged, pending, intDebt: s.intDebt,
+        due, daysLeft, overdue: !!due && daysLeft < 0 && !settled, settled });
+    }
+  }
+  return out.sort((a, b) => (a.settled - b.settled) || (b.entry.date.localeCompare(a.entry.date)));
+}
+function chargeInterest(loanId) {
+  const l = S.doc.entries[loanId], r = loanReport(l.bookId).find(x => x.id === loanId);
+  if (!r || r.pending <= 0) return null;
+  const id = uid(); put('entries', { id, bookId: l.bookId, type: 'expense', desc: 'Interest · ' + l.desc, amount: r.pending, paidBy: l.paidBy, split: { [r.borrower]: r.pending },
+    method: 'exact', date: isoDay(Date.now()), cat: '💸', note: `${r.rate}% p.a.`, interestFor: loanId, createdAt: now() });
+  return id;
+}
+
 /* ───────────────────────── UI: helpers ───────────────────────── */
 const HUES = [252, 199, 152, 24, 340, 45, 175, 290];
 const hueOf = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return HUES[h % HUES.length]; };
@@ -226,7 +299,10 @@ const avatar = (id, cls = '') => { const p = person(id); return `<span class="av
 const avStack = ids => `<span class="avs">${ids.slice(0, 4).map(i => avatar(i, 'xs')).join('')}${ids.length > 4 ? `<span class="av xs more">+${ids.length - 4}</span>` : ''}</span>`;
 const CATS = [['🧾', 'Other'], ['🍽️', 'Food'], ['🛒', 'Groceries'], ['🚗', 'Transport'], ['🏠', 'Home'], ['🎬', 'Fun'], ['✈️', 'Travel'], ['💡', 'Bills'], ['🎁', 'Gift'], ['🏥', 'Health'], ['🔁', 'Subscription'], ['💸', 'Loan']];
 const symbol = cur => { try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).formatToParts(0).find(p => p.type === 'currency').value; } catch { return cur; } };
-const isoDay = d => new Date(d).toISOString().slice(0, 10);
+const ymd = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+const isoDay = d => ymd(new Date(d));
+const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00') - new Date(a + 'T00:00')) / 864e5);
+const shortDate = d => new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 const dayLabel = d => {
   if (d === isoDay(Date.now())) return 'Today';
   if (d === isoDay(Date.now() - 864e5)) return 'Yesterday';
@@ -259,6 +335,37 @@ function render() {
 }
 const money = (v, cur, signed) => (signed && v > 0 ? '+' : '') + fmt(v, cur).replace(/^-/, '−');
 
+
+const cap = x => x.charAt(0).toUpperCase() + x.slice(1);
+const whoName = id => (me() && id === me().id) ? 'you' : pname(id);
+function recurringBlock(b) {
+  const ts = live('entries').filter(e => e.bookId === b.id && e.repeat && PERIOD[e.repeat]);
+  if (!ts.length) return '';
+  const monthly = Math.round(ts.reduce((s, t) => s + perMonth(t), 0));
+  return `<div class="sec-h">Recurring · ${fmt(monthly, b.currency)}/mo</div>` + ts.map(t => `<button class="tx rec" data-act="edit-entry" data-id="${t.id}"><span class="tx-ico">🔁</span>
+    <span class="tx-mid"><b>${esc(t.desc)}</b><small>Every ${PERIOD[t.repeat]} · next ${shortDate(nextDue(t))}</small></span><span class="tx-end"><b>${fmt(t.amount, b.currency)}</b><small>${esc(pname(t.paidBy))} pays</small></span></button>`).join('') + `<div class="sec-h">Activity</div>`;
+}
+function loansBlock(b) {
+  const rs = loanReport(b.id), cur = b.currency; if (!rs.length) return '';
+  const open = rs.filter(r => !r.settled), done = rs.filter(r => r.settled);
+  const chip = r => !r.due ? '' : r.overdue ? `<span class="chip-b neg">Overdue ${-r.daysLeft}d</span>` : r.daysLeft <= 7 ? `<span class="chip-b warn">${r.daysLeft === 0 ? 'Due today' : 'Due in ' + r.daysLeft + 'd'}</span>` : `<span class="chip-b zero">Due ${shortDate(r.due)}</span>`;
+  const card = r => `<div class="loan"><div class="loan-h"><span class="tx-ico">💸</span><div class="grow"><b>${esc(r.entry.desc)}</b>
+      <small>${esc(cap(whoName(r.lender)))} lent ${esc(whoName(r.borrower))} ${fmt(r.principal, cur)}${r.rate ? ` · ${r.rate}% a year` : ''}</small></div>${chip(r)}</div>
+    <div class="loan-n"><div><small>Repaid</small><b>${fmt(r.repaid, cur)}</b></div><div><small>Outstanding</small><b class="${r.out ? 'neg' : 'pos'}">${fmt(r.out + r.intDebt, cur)}</b></div>${r.rate ? `<div><small>Interest so far</small><b>${fmt(r.accrued, cur)}</b></div>` : ''}</div>
+    <div class="btns"><button class="btn sm" data-act="repay-loan" data-id="${r.id}">Record repayment</button>${r.pending > 0 ? `<button class="btn sm ghost" data-act="charge-interest" data-id="${r.id}">+ ${fmt(r.pending, cur)} interest</button>` : ''}</div></div>`;
+  return `<div class="sec-h">Loans</div>` + open.map(card).join('') + done.map(r => `<div class="loan done">✓ ${esc(r.entry.desc)} <small>· fully repaid</small></div>`).join('');
+}
+function dueBanner() {
+  const m = me(); if (!m) return ''; let best = null;
+  for (const b of live('books')) for (const r of loanReport(b.id)) {
+    if (r.settled || !r.due || (r.lender !== m.id && r.borrower !== m.id)) continue;
+    if (r.daysLeft <= 7 && (!best || r.daysLeft < best.r.daysLeft)) best = { r, b };
+  }
+  if (!best) return '';
+  const { r, b } = best, when = r.overdue ? `overdue by ${-r.daysLeft} day${r.daysLeft === -1 ? '' : 's'}` : r.daysLeft === 0 ? 'due today' : `due in ${r.daysLeft} day${r.daysLeft === 1 ? '' : 's'}`;
+  return `<button class="banner due" data-act="open-loans" data-id="${b.id}"><span>⏰</span><span><b>${r.lender === m.id ? esc(pname(r.borrower)) + '’s loan' : 'Your loan'} ${when}</b><small>${fmt(r.out + r.intDebt, b.currency)} · ${esc(b.name)}</small></span><i>›</i></button>`;
+}
+
 function homeView() {
   const m = me(), books = live('books').sort((a, b) => b.updatedAt - a.updatedAt), tot = {};
   const cards = books.map(b => {
@@ -284,7 +391,7 @@ function homeView() {
   const name = (m && m.name !== 'Me' && m.name) || '';
   return `<header class="top"><div>${name ? `<small>Hi,</small><h1>${esc(name)} 👋</h1>` : `<h1>Welcome 👋</h1>`}</div>${statusPill()}
       <button class="iconbtn" data-act="settings" aria-label="Settings">${m ? avatar(m.id) : '⚙️'}</button></header>
-    <main>${hero}${backup}${books.length ? `<div class="sec-h">Your books</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>New book</b></span></button></div>` : ''}</main>
+    <main>${hero}${dueBanner()}${backup}${books.length ? `<div class="sec-h">Your books</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>New book</b></span></button></div>` : ''}</main>
     <button class="fab ${books.length ? '' : 'wide'}" data-act="${books.length ? 'quick-add' : 'new-book'}" aria-label="${books.length ? 'Add expense' : 'New book'}"><i>＋</i><span>${books.length ? 'Add expense' : 'Create your first book'}</span></button>`;
 }
 
@@ -316,7 +423,7 @@ function bookView() {
     body = `<div class="card pad">` + ids.map(i => { const v = net[i] || 0;
       return `<div class="bal">${avatar(i)}<div class="bal-mid"><div class="bal-top"><b>${esc(pname(i))}</b><span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : 'muted'}">${Math.abs(v) < 1 ? 'settled' : money(v, cur, true)}</span></div>
         <div class="bar"><i class="${v >= 0 ? 'pos' : 'neg'}" style="width:${Math.abs(v) / max * 100}%"></i></div></div></div>`; }).join('') + `</div>
-      <div class="sec-h">Settle up <button class="link" data-act="share">Share summary</button></div>` + (debts.length ? debts.map(d => `<div class="settle"><div class="settle-who">${avatar(d.from, 'sm')}<span class="arrow">→</span>${avatar(d.to, 'sm')}</div>
+      ${loansBlock(b)}<div class="sec-h">Settle up <button class="link" data-act="share">Share summary</button></div>` + (debts.length ? debts.map(d => `<div class="settle"><div class="settle-who">${avatar(d.from, 'sm')}<span class="arrow">→</span>${avatar(d.to, 'sm')}</div>
         <div class="settle-t"><b>${esc(pname(d.from))} pays ${esc(pname(d.to))}</b><small>${fmt(d.amt, cur)}</small></div>
         <button class="btn sm" data-act="settle" data-from="${d.from}" data-to="${d.to}" data-amt="${d.amt}">Settle</button></div>`).join('') :
       `<div class="empty small"><div class="ico">🎉</div><b>All settled up</b></div>`);
@@ -326,6 +433,7 @@ function bookView() {
       <div class="addrow"><input id="addm" placeholder="Add someone to this book…" maxlength="40" autocomplete="off"><button class="btn" data-act="add-member">Add</button></div>
       <div class="btns two"><button class="btn" data-act="edit-book">✏️ Edit book</button><button class="btn danger" data-act="del-book">🗑 Delete</button></div>`;
   }
+  if (tab === 'entries') body = recurringBlock(b) + body;
   return `<header class="top"><button class="iconbtn" data-act="back" aria-label="Back">‹</button><div class="grow"><h1>${esc(b.emoji || '📒')} ${esc(b.name)}</h1></div>${statusPill()}
     <button class="iconbtn" data-act="settings" aria-label="Settings">⚙️</button></header>
     <main>${hero}<div class="tabs" role="tablist">${tabs}</div>${body}</main>
@@ -397,6 +505,7 @@ function entrySheet(entryId, preset, bookId) {
     : { type: 'expense', desc: '', amount: '', paidBy: defPayer(), date: isoDay(Date.now()), cat: '🧾', note: '', method: 'equal', sel: [...members], vals: {}, custom: false };
   if (ex) for (const [p, c] of Object.entries(ex.split)) E.vals[p] = (ex.method === 'percent' || ex.method === 'shares') ? ((ex.vals && ex.vals[p]) ?? '') : toInput(c, cur);
   if (ex && ex.type === 'expense' && ex.method === 'equal') E.custom = false;
+  E.repeat = ex ? (ex.repeat || '') : ''; E.rate = ex && ex.loan && ex.loan.rate ? String(ex.loan.rate) : ''; E.due = ex && ex.loan ? (ex.loan.due || '') : '';
   if (preset) Object.assign(E, preset);
   const o = openSheet('<div id="form"></div>'), root = $('#form', o);
   const amt = () => parseMoney(E.amount, cur);
@@ -423,13 +532,15 @@ function entrySheet(entryId, preset, bookId) {
     const h = $('#hint', root);
     if (h) {
       if (c.msg) { h.textContent = c.msg; h.className = 'hint bad'; }
+      else if (isLoanForm() && total) { h.textContent = `Lent ${fmt(total, cur)} to ${pname(E.sel[0])}`; h.className = 'hint'; }
       else if (E.method === 'equal' && E.sel.length && total) { h.textContent = `${fmt(Math.round(total / E.sel.length), cur)} each · ${E.sel.length} ${E.sel.length === 1 ? 'person' : 'people'}`; h.className = 'hint'; }
       else { h.textContent = ''; h.className = 'hint'; }
     }
-    const sb = $('#savebtn', root); if (sb) sb.textContent = (ex ? 'Save' : E.type === 'settle' ? 'Record payment' : 'Add expense') + (total ? ` · ${fmt(total, cur)}` : '');
+    const sb = $('#savebtn', root); if (sb) sb.textContent = (ex ? 'Save' : E.type === 'settle' ? 'Record payment' : isLoanForm() ? 'Add loan' : 'Add expense') + (total ? ` · ${fmt(total, cur)}` : '');
   }
   const pc = (id, on, x) => `<button class="pc ${on ? 'on' : ''}" data-x="${x}" data-v="${id}">${avatar(id, 'xs')}${esc(pname(id))}</button>`;
 
+  const isLoanForm = () => E.type === 'expense' && E.cat === '💸' && E.sel.length === 1 && E.sel[0] !== E.paidBy && !(ex && ex.interestFor);
   function draw() {
     const isS = E.type === 'settle', unit = E.method === 'percent' ? '%' : E.method === 'shares' ? '×' : cur;
     const books = live('books');
@@ -441,7 +552,7 @@ function entrySheet(entryId, preset, bookId) {
       <div class="cats">${CATS.map(([c, l]) => `<button data-x="cat" data-v="${c}" data-l="${l}" class="${E.cat === c ? 'on' : ''}"><i>${c}</i>${l}</button>`).join('')}</div>`}
       <div class="lbl">${isS ? 'Who paid?' : 'Paid by'}</div><div class="pcs scroll">${members.map(i => pc(i, i === E.paidBy, 'paid')).join('')}</div>
       ${isS ? `<div class="lbl">Paid to</div><div class="pcs scroll">${members.filter(i => i !== E.paidBy).map(i => pc(i, i === E.sel[0], 'to')).join('')}</div>` :
-      `<div class="lbl">Split between <button class="link" data-x="all">${E.sel.length === members.length ? 'Clear' : 'Everyone'}</button></div>
+      `<div class="lbl">${E.cat === '💸' ? 'Lent to' : 'Split between'} <button class="link" data-x="all">${E.sel.length === members.length ? 'Clear' : 'Everyone'}</button></div>
       ${E.custom ? `<div class="seg">${[['equal', 'Equal'], ['exact', 'Exact'], ['percent', '%'], ['shares', 'Shares']].map(([k, l]) => `<button data-x="method" data-v="${k}" class="${E.method === k ? 'on' : ''}">${l}</button>`).join('')}</div>
         <div class="card pad">${members.map(i => `<div class="who"><label>${avatar(i, 'xs')}<input type="checkbox" data-x="sel" data-v="${i}" ${E.sel.includes(i) ? 'checked' : ''}><span>${esc(pname(i))}</span></label>
           ${E.method !== 'equal' && E.sel.includes(i) ? `<input class="val" data-val="${i}" inputmode="decimal" value="${esc(E.vals[i] ?? '')}" placeholder="${unit}">` : ''}<span class="calc" data-calc="${i}"></span></div>`).join('')}</div>` :
@@ -449,12 +560,16 @@ function entrySheet(entryId, preset, bookId) {
       <div class="split-foot"><span id="hint" class="hint"></span><button class="link" data-x="custom">${E.custom ? 'Simple split' : 'Customize split'}</button></div>`}
       <div class="row2"><label class="field"><span>Date</span><input id="edt" type="date" value="${E.date}"></label>
         ${isS ? '' : `<label class="field grow"><span>Note</span><input id="en" value="${esc(E.note)}" placeholder="Optional" maxlength="300"></label>`}</div>
+      ${isS ? '' : `${isLoanForm() ? `<div class="loanbox"><div class="lbl">Loan terms <small>optional</small></div><div class="row2"><label class="field"><span>Interest % / year</span><input id="elr" inputmode="decimal" value="${esc(E.rate)}" placeholder="0"></label>
+        <label class="field"><span>Due date</span><input id="eld" type="date" value="${E.due}"></label></div></div>` : ''}
+        ${ex && ex.fromRule ? `<p class="note">🔁 Part of a recurring series. Edit the original to change future ones.</p>` : `<label class="field"><span>Repeat</span><select id="er">${[['', "Doesn't repeat"], ['weekly', 'Every week'], ['monthly', 'Every month'], ['yearly', 'Every year']].map(([k, l]) => `<option value="${k}" ${E.repeat === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`}`}
       <div class="btns"><button class="cta" id="savebtn" data-x="save"></button>${ex ? `<button class="btn danger" data-x="del" aria-label="Delete">🗑</button>` : ''}</div>`;
     updateCalc();
   }
   const pull = () => {
     const g = id => root.querySelector(id);
     if (g('#ed')) E.desc = g('#ed').value; if (g('#ea')) E.amount = g('#ea').value; if (g('#edt')) E.date = g('#edt').value || E.date; if (g('#en')) E.note = g('#en').value;
+    if (g('#er')) E.repeat = g('#er').value; if (g('#elr')) E.rate = g('#elr').value; if (g('#eld')) E.due = g('#eld').value;
   };
   root.addEventListener('input', e => {
     if (e.target.dataset.val) { E.vals[e.target.dataset.val] = e.target.value; updateCalc(); }
@@ -471,7 +586,7 @@ function entrySheet(entryId, preset, bookId) {
     if (x === 'close') closeSheet();
     else if (x === 'type') { E.type = v; E.sel = v === 'settle' ? [members.find(i => i !== E.paidBy)].filter(Boolean) : [...members]; draw(); }
     else if (x === 'book') { setBook(v); E.paidBy = defPayer(); E.sel = [...members]; E.vals = {}; draw(); }
-    else if (x === 'cat') { E.cat = v; if (!E.desc.trim()) E.desc = t.dataset.l === 'Other' ? '' : t.dataset.l; draw(); $('#ed', root).focus(); }
+    else if (x === 'cat') { E.cat = v; if (!E.desc.trim()) E.desc = t.dataset.l === 'Other' ? '' : t.dataset.l; if (v === '💸' && !ex && E.sel.length !== 1) E.sel = [members.find(i => i !== E.paidBy)].filter(Boolean); draw(); $('#ed', root).focus(); }
     else if (x === 'paid') { E.paidBy = v; if (E.type === 'settle' && E.sel[0] === v) E.sel = [members.find(i => i !== v)]; draw(); }
     else if (x === 'to') { E.sel = [v]; draw(); }
     else if (x === 'tog') { const i = E.sel.indexOf(v); i < 0 ? E.sel.push(v) : E.sel.splice(i, 1); draw(); }
@@ -489,7 +604,14 @@ function entrySheet(entryId, preset, bookId) {
       const entry = { id: ex ? ex.id : uid(), bookId: bid, type: E.type, desc: isS ? 'Payment' : (E.desc.trim() || catLabel || 'Expense'), amount: total, paidBy: E.paidBy,
         split: Object.fromEntries(Object.entries(c.split).filter(([, n]) => n > 0 || isS)), method: isS ? 'exact' : E.method, vals,
         date: E.date, cat: E.cat, note: E.note.trim(), createdAt: ex ? ex.createdAt : now() };
-      put('entries', entry); buzz(); closeSheet();
+      if (!isS) {
+        if (E.repeat) entry.repeat = E.repeat;
+        const only = Object.keys(entry.split);
+        if (E.cat === '💸' && only.length === 1 && only[0] !== E.paidBy && !(ex && ex.interestFor)) entry.loan = { rate: Math.max(0, parseFloat(String(E.rate).replace(',', '.')) || 0), due: E.due || '' };
+      }
+      if (ex && ex.fromRule) entry.fromRule = ex.fromRule;
+      if (ex && ex.interestFor) entry.interestFor = ex.interestFor;
+      put('entries', entry); materializeRecurring(); buzz(); closeSheet();
       if (S.ui.bookId !== bid) go('book/' + bid);
       toast(ex ? 'Entry updated' : isS ? 'Payment recorded' : 'Expense added');
     }
@@ -567,7 +689,8 @@ function loadSampleData(seed = 7) {
     const total = Math.round(amount * factor(S.doc.books[bk].currency)), id = 'smp-e-' + (seq++);
     S.doc.entries[id] = { id, bookId: bk, type: 'settle', desc: 'Payment', amount: total, paidBy: from, split: { [to]: total }, method: 'exact', date: day(d), cat: '🤝', note: '', createdAt: t0 + seq, updatedAt: t0 };
   };
-  const loan = (bk, d, lender, borrower, amount, desc) => exp(bk, d, desc, '💸', amount, lender, { [borrower]: amount }, 'exact');
+  const loan = (bk, d, lender, borrower, amount, desc, terms) => { exp(bk, d, desc, '💸', amount, lender, { [borrower]: amount }, 'exact'); S.doc.entries['smp-e-' + (seq - 1)].loan = terms || { rate: 0, due: '' }; };
+  const rec = (bk, d, desc, cat, amount, paidBy, spec, period) => { exp(bk, d, desc, cat, amount, paidBy, spec); S.doc.entries['smp-e-' + (seq - 1)].repeat = period; };
   const both = [P.me, P.ravi];
 
   // 1) Daily life — small everyday spends, shared / personal / paid-for-the-other
@@ -594,8 +717,8 @@ function loadSampleData(seed = 7) {
 
   // 3) Rent & bills — 3 months, different payers, shares for maid
   const flat = mkBook('flat', 'Flat 4B', '🏠', 'INR', [P.me, P.ravi, P.priya]), three = [P.me, P.ravi, P.priya];
+  rec(flat, 85, 'Rent', '🏠', 36000, P.me, three, 'monthly');
   for (const [mi, d] of [[0, 85], [1, 55], [2, 25]]) {
-    exp(flat, d, 'Rent', '🏠', 36000, P.me, three);
     exp(flat, d - 2, 'Electricity', '💡', Math.round(1800 + rnd() * 1200), P.ravi, three);
     exp(flat, d - 3, 'WiFi', '💡', 1179, P.priya, three);
     exp(flat, d - 3, 'Water', '💡', 300, P.ravi, three);
@@ -606,20 +729,19 @@ function loadSampleData(seed = 7) {
 
   // 4) Subscriptions — monthly shared / family plans + a personal one
   const subs = mkBook('subs', 'Subscriptions', '🔁', 'INR', [P.me, P.ravi, P.meera, P.dev, P.priya]);
-  for (const d of [70, 40, 10]) {
-    exp(subs, d, 'Netflix', '🔁', 649, P.me, [P.me, P.ravi, P.meera, P.dev]);
-    exp(subs, d - 1, 'Spotify Family', '🔁', 179, P.ravi, [P.me, P.ravi, P.priya]);
-    exp(subs, d - 1, 'iCloud 50GB (mine)', '🔁', 75, P.me, [P.me]);
-    exp(subs, d - 2, 'YouTube Premium Family', '🔁', 189, P.meera, [P.me, P.meera, P.dev]);
-  }
+  rec(subs, 70, 'Netflix', '🔁', 649, P.me, [P.me, P.ravi, P.meera, P.dev], 'monthly');
+  rec(subs, 69, 'Spotify Family', '🔁', 179, P.ravi, [P.me, P.ravi, P.priya], 'monthly');
+  rec(subs, 69, 'iCloud 50GB (mine)', '🔁', 75, P.me, [P.me], 'monthly');
+  rec(subs, 68, 'YouTube Premium Family', '🔁', 189, P.meera, [P.me, P.meera, P.dev], 'monthly');
+  rec(subs, 60, 'Cloud storage (yearly)', '🔁', 2400, P.dev, [P.me, P.dev], 'yearly');
   pay(subs, 35, P.dev, P.me, 400); pay(subs, 33, P.priya, P.ravi, 60);
 
   // 5) Loans & IOUs — lend, borrow, instalments, fully repaid
   const loans = mkBook('loans', 'Loans & IOUs', '💸', 'INR', [P.me, P.ravi, P.meera, P.dev, P.priya]);
-  loan(loans, 120, P.me, P.ravi, 20000, 'Loan to Ravi');        pay(loans, 90, P.ravi, P.me, 5000); pay(loans, 60, P.ravi, P.me, 5000);
-  loan(loans, 100, P.dev, P.me, 3000, 'Borrowed from Dev');     pay(loans, 80, P.me, P.dev, 1000);
+  loan(loans, 120, P.me, P.ravi, 20000, 'Loan to Ravi', { rate: 12, due: day(30) });        pay(loans, 90, P.ravi, P.me, 5000); pay(loans, 60, P.ravi, P.me, 5000);
+  loan(loans, 100, P.dev, P.me, 3000, 'Borrowed from Dev', { rate: 0, due: day(-20) });     pay(loans, 80, P.me, P.dev, 1000);
   exp(loans, 50, 'Meera paid my clinic bill', '🏥', 1500, P.meera, { [P.me]: 1500 }, 'exact'); pay(loans, 45, P.me, P.meera, 1500);
-  loan(loans, 30, P.me, P.priya, 800, 'Lunch money for Priya'); pay(loans, 5, P.priya, P.me, 800);
+  loan(loans, 30, P.me, P.priya, 800, 'Lunch money for Priya', { rate: 0, due: day(10) }); pay(loans, 5, P.priya, P.me, 800);
 
   // 6) Foreign currency — EUR weekend, awkward cents
   const eu = mkBook('berlin', 'Berlin weekend', '✈️', 'EUR', [P.me, P.ravi, P.priya]);
@@ -628,7 +750,7 @@ function loadSampleData(seed = 7) {
   exp(eu, 15, 'Museum pass', '🎬', 45, P.me, { [P.me]: 15, [P.ravi]: 15, [P.priya]: 15 }, 'exact');
   exp(eu, 15, 'Dinner', '🍽️', 128.9, P.priya, { [P.me]: 1, [P.ravi]: 1, [P.priya]: 2 }, 'shares');
   exp(eu, 14, 'Beers', '🍽️', 33.3, P.me, [P.me, P.ravi, P.priya]);
-  touched();
+  materializeRecurring(); touched();
 }
 function clearSampleData() {
   for (const c of COLL) for (const id of Object.keys(S.doc[c])) if (isSample(id) && !S.doc[c][id].deleted)
@@ -670,6 +792,12 @@ document.addEventListener('click', e => {
     put('entries', { id, bookId: bk.id, type: 'settle', desc: 'Payment', amount: +d.amt, paidBy: d.from, split: { [d.to]: +d.amt }, method: 'exact', date: isoDay(Date.now()), cat: '🤝', note: '', createdAt: now() });
     buzz(); toast(`${pname(d.from)} paid ${pname(d.to)} ${fmt(+d.amt, bk.currency)}`, () => { del('entries', id); toast('Payment removed'); });
   }
+  else if (a === 'repay-loan') {
+    const r = loanReport(S.ui.bookId).find(x => x.id === d.id), bk = S.doc.books[S.ui.bookId];
+    entrySheet(null, { type: 'settle', paidBy: r.borrower, sel: [r.lender], amount: toInput(r.out + r.intDebt, bk.currency) });
+  }
+  else if (a === 'charge-interest') { const id = chargeInterest(d.id); if (id) { buzz(); toast('Interest added to balance', () => { del('entries', id); toast('Interest removed'); }); } }
+  else if (a === 'open-loans') { S.ui.tab = 'balances'; go('book/' + d.id); }
   else if (a === 'share') shareSummary();
   else if (a === 'add-member') {
     const inp = $('#addm'), n = inp && inp.value.trim(), bk = S.doc.books[S.ui.bookId]; if (!n) return;
@@ -681,11 +809,11 @@ document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id
 window.addEventListener('hashchange', route);
 window.addEventListener('online', () => { render(); sync(false); });
 window.addEventListener('offline', () => { render(); toast('Offline — everything is saved on this device'); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(false); });
-setInterval(() => { if (!document.hidden) sync(false); }, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { materializeRecurring(); sync(false); } });
+setInterval(() => { if (!document.hidden) { materializeRecurring(); sync(false); } }, 60000);
 window.addEventListener('storage', e => { if (e.key === 'sb.doc') { S.doc = jget('sb.doc', S.doc); render(); } });
 
 /* ───────────────────────── boot ───────────────────────── */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(e => console.warn('sw', e));
-ensureMe(); route();
+ensureMe(); route(); materializeRecurring();
 if (S.meta.wasSignedIn) sync(false);

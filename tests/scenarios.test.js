@@ -93,9 +93,9 @@ let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', 
   const rt = await p.evaluate(async () => {
     const diffs = []; let n = 0;
     for (const e of live('entries').filter(x => isSample(x.id))) {
-      S.ui.bookId = e.bookId; const before = JSON.stringify([e.amount, e.paidBy, e.split]);
+      S.ui.bookId = e.bookId; const before = JSON.stringify([e.amount, e.paidBy, e.split, e.repeat, e.loan]);
       entrySheet(e.id); document.querySelector('#savebtn').click(); n++;
-      const a = S.doc.entries[e.id]; if (JSON.stringify([a.amount, a.paidBy, a.split]) !== before) diffs.push(e.desc + ' (' + e.method + ')');
+      const a = S.doc.entries[e.id]; if (JSON.stringify([a.amount, a.paidBy, a.split, a.repeat, a.loan]) !== before) diffs.push(e.desc + ' (' + e.method + ')');
       document.querySelector('.overlay') && closeSheet();
     }
     return { n, diffs };

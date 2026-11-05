@@ -181,3 +181,16 @@ code{background:var(--soft);padding:1px 5px;border-radius:5px;font-size:12px}
 
 .top .grow~.pill .st-t{display:none}.top .grow~.pill .sync-dot{margin:0}.top .grow~.pill{padding:10px}
 .hero-row b+b{margin-top:0;font-size:15px;opacity:.9}
+
+.chip-b.warn{background:#fef3c7;color:#b45309}@media (prefers-color-scheme:dark){.chip-b.warn{background:#4a3410;color:#fbbf24}}
+.banner.due{border:1.5px solid color-mix(in srgb,var(--neg) 40%,transparent);margin-bottom:10px}
+.tx.rec .tx-ico{background:color-mix(in srgb,var(--brand) 14%,var(--card))}
+.loan{background:var(--card);box-shadow:var(--sh);border-radius:18px;padding:12px 14px;margin-bottom:10px}
+.loan-h{display:flex;align-items:center;gap:12px}.loan-h b{display:block}.loan-h small{color:var(--muted);font-size:12.5px}
+.loan-n{display:flex;gap:10px;margin:12px 0 2px;padding-top:10px;border-top:1px solid var(--line)}.loan-n>div{flex:1}.loan-n small{display:block;color:var(--muted);font-size:12px}.loan-n b{font-variant-numeric:tabular-nums}
+.loan .btns{margin-top:10px}.btn.sm.ghost{background:var(--soft);color:var(--brand)}
+.loan.done{box-shadow:none;background:transparent;border:1px dashed var(--line);color:var(--muted);padding:9px 14px;font-size:14px}
+.loanbox{background:var(--soft);border-radius:16px;padding:2px 12px 12px;margin-top:12px}.loanbox .lbl small{text-transform:none;letter-spacing:0;font-weight:500}
+select{width:100%;padding:13px 14px;border-radius:14px;border:1.5px solid transparent;background:var(--card);box-shadow:var(--sh);outline:0}
+
+.loan .btns{flex-wrap:wrap}.loan .btns .btn{flex:1 1 auto;white-space:nowrap}

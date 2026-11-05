@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node tests/serve.js",
     "check": "node --check app.js && node --check sw.js",
-    "test": "node tests/e2e.test.js && node tests/scenarios.test.js"
+    "test": "node tests/e2e.test.js && node tests/scenarios.test.js && node tests/features.test.js"
   },
   "devDependencies": { "playwright": "1.63.0" }
 }
