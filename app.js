@@ -25,7 +25,7 @@ const emptyDoc = () => ({ v: 1, people: {}, books: {}, entries: {} });
 const S = {
   doc: jget('sb.doc', null) || emptyDoc(),
   meta: Object.assign({ fileId: null, lastSync: 0, dirty: false, user: null, clientId: '', token: null, tokenExp: 0, wasSignedIn: false }, jget('sb.meta', {})),
-  ui: { view: 'home', bookId: null, tab: 'entries' },
+  ui: { view: 'home', bookId: null, tab: 'entries', limit: 40 },
   sync: { state: 'idle', error: '' }, // idle | busy | err
 };
 const persist = () => { jset('sb.doc', S.doc); jset('sb.meta', S.meta); };
@@ -216,7 +216,7 @@ function statusInfo() {
   if (S.meta.dirty) return { cls: 'pending', text: 'Pending' };
   return { cls: 'ok', text: 'Synced' };
 }
-function paintStatus() { const el = $('#status'); if (!el) return; const s = statusInfo(); el.innerHTML = `<span class="sync-dot ${s.cls}"></span>${s.text}`; }
+function paintStatus() { const el = $('#status'); if (!el) return; const s = statusInfo(); el.title = s.text; el.innerHTML = `<span class="sync-dot ${s.cls}"></span><span class="st-t">${s.text}</span>`; }
 
 /* ───────────────────────── UI: helpers ───────────────────────── */
 const HUES = [252, 199, 152, 24, 340, 45, 175, 290];
@@ -224,7 +224,7 @@ const hueOf = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charC
 const initials = n => (String(n).trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2) || '?').toUpperCase();
 const avatar = (id, cls = '') => { const p = person(id); return `<span class="av ${cls}" style="--h:${hueOf(id)}">${esc(initials(p ? p.name : '?'))}</span>`; };
 const avStack = ids => `<span class="avs">${ids.slice(0, 4).map(i => avatar(i, 'xs')).join('')}${ids.length > 4 ? `<span class="av xs more">+${ids.length - 4}</span>` : ''}</span>`;
-const CATS = [['🧾', 'Other'], ['🍽️', 'Food'], ['🛒', 'Groceries'], ['🚗', 'Transport'], ['🏠', 'Home'], ['🎬', 'Fun'], ['✈️', 'Travel'], ['💡', 'Bills'], ['🎁', 'Gift'], ['🏥', 'Health']];
+const CATS = [['🧾', 'Other'], ['🍽️', 'Food'], ['🛒', 'Groceries'], ['🚗', 'Transport'], ['🏠', 'Home'], ['🎬', 'Fun'], ['✈️', 'Travel'], ['💡', 'Bills'], ['🎁', 'Gift'], ['🏥', 'Health'], ['🔁', 'Subscription'], ['💸', 'Loan']];
 const symbol = cur => { try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).formatToParts(0).find(p => p.type === 'currency').value; } catch { return cur; } };
 const isoDay = d => new Date(d).toISOString().slice(0, 10);
 const dayLabel = d => {
@@ -268,14 +268,15 @@ function homeView() {
     return `<button class="bk" data-act="open-book" data-id="${b.id}"><span class="bk-ico">${esc(b.emoji || '📒')}</span>
       <span class="bk-mid"><b>${esc(b.name)}</b>${avStack(b.memberIds)}</span>${chip}</button>`;
   }).join('');
-  const cur = Object.keys(tot);
+  const cnt = {}; books.forEach(b => cnt[b.currency] = (cnt[b.currency] || 0) + 1);
+  const cur = Object.keys(tot).sort((x, y) => cnt[y] - cnt[x]);   // most-used currency leads
   const hero = cur.length ? (() => {
     const netOf = c => tot[c].owed - tot[c].owe, c0 = cur[0], n0 = netOf(c0);
     return `<section class="hero"><div class="hero-l">Overall balance</div>
       <div class="hero-n ${n0 < 0 ? 'neg' : ''}">${money(n0, c0, true)}</div>
       <div class="hero-s">${n0 === 0 ? 'You are all settled up' : n0 > 0 ? 'in your favour across all books' : 'you owe across all books'}${cur.slice(1).map(c => ` · ${money(netOf(c), c, true)}`).join('')}</div>
-      <div class="hero-row"><div><span class="dot pos"></span>Owed to you<b>${cur.map(c => fmt(tot[c].owed, c)).join(' · ')}</b></div>
-      <div><span class="dot neg"></span>You owe<b>${cur.map(c => fmt(tot[c].owe, c)).join(' · ')}</b></div></div></section>`;
+      <div class="hero-row"><div><span class="dot pos"></span>Owed to you${cur.filter(c => tot[c].owed).map(c => `<b>${fmt(tot[c].owed, c)}</b>`).join('') || '<b>—</b>'}</div>
+      <div><span class="dot neg"></span>You owe${cur.filter(c => tot[c].owe).map(c => `<b>${fmt(tot[c].owe, c)}</b>`).join('') || '<b>—</b>'}</div></div></section>`;
   })() : `<section class="hero welcome"><div class="hero-l">Welcome to SplitBook</div><div class="hero-t">Track shared money,<br>without the awkwardness.</div>
       <ol class="steps"><li><i>1</i>Create a book for a trip, home or group</li><li><i>2</i>Add expenses — split in one tap</li><li><i>3</i>See who owes who and settle up</li></ol>
       ${(!m || m.name === 'Me') ? `<input id="wn" class="wn" placeholder="Your name (optional)" maxlength="40" autocomplete="given-name">` : ''}</section>`;
@@ -300,7 +301,7 @@ function bookView() {
   let body = '';
   if (tab === 'entries') {
     let last = '';
-    body = es.length ? es.map(e => {
+    body = es.length ? es.slice(0, S.ui.limit).map(e => {
       const day = dayLabel(e.date), head = day !== last ? `<div class="day">${day}</div>` : ''; last = day;
       const mn = m ? (e.paidBy === m.id ? e.amount : 0) - (e.split[m.id] || 0) : 0;
       const isS = e.type === 'settle';
@@ -308,7 +309,7 @@ function bookView() {
       const right = mn === 0 ? `<small class="muted">not involved</small>` : `<b class="${mn > 0 ? 'pos' : 'neg'}">${mn > 0 ? '+' : '−'}${fmt(Math.abs(mn), cur)}</b><small>${mn > 0 ? 'you lent' : 'you borrowed'}</small>`;
       return head + `<button class="tx" data-act="edit-entry" data-id="${e.id}"><span class="tx-ico ${isS ? 'pay' : ''}">${isS ? '🤝' : esc(e.cat || '🧾')}</span>
         <span class="tx-mid"><b>${esc(e.desc || (isS ? 'Payment' : 'Expense'))}</b><small>${sub}</small></span><span class="tx-end">${right}</span></button>`;
-    }).join('') : `<div class="empty"><div class="ico">🧾</div><b>Nothing here yet</b><p>Record the first shared expense.</p><button class="btn sm" data-act="new-entry">＋ Add expense</button></div>`;
+    }).join('') + (es.length > S.ui.limit ? `<button class="btn more" data-act="more">Show older · ${es.length - S.ui.limit} more</button>` : '') : `<div class="empty"><div class="ico">🧾</div><b>Nothing here yet</b><p>Record the first shared expense.</p><button class="btn sm" data-act="new-entry">＋ Add expense</button></div>`;
   } else if (tab === 'balances') {
     const ids = b.memberIds.filter(i => person(i) && !person(i).deleted), debts = simplify(net);
     const max = Math.max(1, ...ids.map(i => Math.abs(net[i] || 0)));
@@ -509,6 +510,9 @@ function settingsSheet() {
       ${clientId() ? `<button class="cta" data-x="in">Continue with Google</button>` : `<p class="note">Google backup isn't enabled for this app yet. Everything still works and is saved on this device.</p>`}`}</div>
     <div class="lbl">Your name</div>
     <div class="addrow"><input id="myname" value="${esc((m || {}).name || '')}"><button class="btn" data-x="savename">Save</button></div>
+    <div class="lbl">Demo</div>
+    <div class="card pad"><p class="note">Fill the app with realistic example books — daily spends, a trip, rent &amp; bills, subscriptions, loans and a EUR weekend — to see how everything works.</p>
+      <div class="btns two" style="margin:8px 0"><button class="btn" data-x="${hasSample() ? 'sample-clear' : 'sample-load'}">${hasSample() ? 'Remove sample data' : 'Load sample data'}</button></div></div>
     <div class="lbl">Backup</div><div class="btns two"><button class="btn" data-x="export">Export</button><button class="btn" data-x="import">Import</button></div>
     <p class="note c">SplitBook · works offline · installable</p>`);
   o.addEventListener('click', async e => {
@@ -518,6 +522,8 @@ function settingsSheet() {
     else if (x === 'out') { closeSheet(); signOut(); }
     else if (x === 'sync') { closeSheet(); await sync(true); toast(S.sync.state === 'err' ? 'Sync failed: ' + S.sync.error : 'Synced ✓'); }
     else if (x === 'savename') { const n = $('#myname', o).value.trim(); if (m && n) { put('people', { ...m, name: n }); toast('Saved'); } }
+    else if (x === 'sample-load') { closeSheet(); loadSampleData(); go(''); toast('Sample data loaded'); }
+    else if (x === 'sample-clear') { closeSheet(); clearSampleData(); go(''); toast('Sample data removed'); }
     else if (x === 'export') {
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(S.doc, null, 2)], { type: 'application/json' }));
       a.download = 'splitbook-backup-' + isoDay(Date.now()) + '.json'; a.click();
@@ -528,6 +534,106 @@ function settingsSheet() {
       inp.click();
     }
   });
+}
+
+/* ---- sample data (demo / testing) ---- */
+const isSample = id => String(id).startsWith('smp-');
+const hasSample = () => Object.values(S.doc.books).some(b => !b.deleted && isSample(b.id));
+function loadSampleData(seed = 7) {
+  let a = seed >>> 0;
+  const rnd = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const between = (lo, hi) => lo + rnd() * (hi - lo);
+  const t0 = now(); let seq = 0, nb = 0;
+  ensureMe(); const M = me().id;
+  const P = { me: M };
+  for (const [k, name] of [['ravi', 'Ravi'], ['meera', 'Meera'], ['dev', 'Dev'], ['priya', 'Priya']]) {
+    P[k] = 'smp-p-' + k; S.doc.people[P[k]] = { id: P[k], name, createdAt: t0, updatedAt: t0 };
+  }
+  const day = d => isoDay(Date.now() - d * 864e5);
+  const mkBook = (k, name, emoji, currency, members) => {
+    const id = 'smp-b-' + k; S.doc.books[id] = { id, name, emoji, currency, memberIds: members, createdAt: t0, updatedAt: t0 + (nb++) }; return id;
+  };
+  // spec: array => equal | {id: weight} for shares/percent | {id: major units} for exact
+  const exp = (bk, d, desc, cat, amount, paidBy, spec, method = 'equal') => {
+    const cur = S.doc.books[bk].currency, f = factor(cur), total = Math.round(amount * f);
+    let split, vals;
+    if (method === 'equal') { const w = {}; spec.forEach(i => w[i] = 1); split = byWeights(total, w); }
+    else if (method === 'exact') { split = Object.fromEntries(Object.entries(spec).map(([i, v]) => [i, Math.round(v * f)])); }
+    else { split = byWeights(total, spec); vals = Object.fromEntries(Object.entries(spec).map(([i, v]) => [i, String(v)])); }
+    const id = 'smp-e-' + (seq++);
+    S.doc.entries[id] = { id, bookId: bk, type: 'expense', desc, amount: total, paidBy, split, method, vals, date: day(d), cat, note: '', createdAt: t0 + seq, updatedAt: t0 };
+  };
+  const pay = (bk, d, from, to, amount) => {
+    const total = Math.round(amount * factor(S.doc.books[bk].currency)), id = 'smp-e-' + (seq++);
+    S.doc.entries[id] = { id, bookId: bk, type: 'settle', desc: 'Payment', amount: total, paidBy: from, split: { [to]: total }, method: 'exact', date: day(d), cat: '🤝', note: '', createdAt: t0 + seq, updatedAt: t0 };
+  };
+  const loan = (bk, d, lender, borrower, amount, desc) => exp(bk, d, desc, '💸', amount, lender, { [borrower]: amount }, 'exact');
+  const both = [P.me, P.ravi];
+
+  // 1) Daily life — small everyday spends, shared / personal / paid-for-the-other
+  const daily = mkBook('daily', 'Daily life', '🍵', 'INR', both);
+  const things = [['Chai & snacks', '🍽️', 40, 120], ['Auto / cab', '🚗', 60, 350], ['Lunch', '🍽️', 120, 450], ['Groceries', '🛒', 200, 1500],
+    ['Dinner out', '🍽️', 300, 1200], ['Coffee', '🍽️', 90, 260], ['Pharmacy', '🏥', 80, 600], ['Movie', '🎬', 250, 800]];
+  for (let d = 29; d >= 0; d--) for (let k = 0, n = 1 + Math.floor(rnd() * 3); k < n; k++) {
+    const [desc, cat, lo, hi] = things[Math.floor(rnd() * things.length)];
+    const amt = Math.round(between(lo, hi)) + (rnd() < .3 ? .5 : 0), payer = rnd() < .55 ? P.me : P.ravi, other = payer === P.me ? P.ravi : P.me, r = rnd();
+    exp(daily, d, desc, cat, amt, payer, r < .55 ? both : r < .85 ? [payer] : [other]);   // shared | personal | paid for them
+  }
+  pay(daily, 12, P.ravi, P.me, 500);
+
+  // 2) Event — Goa trip: every split method, subset of people, odd cents, part-settled
+  const goa = mkBook('goa', 'Goa trip', '🏖️', 'INR', [P.me, P.ravi, P.meera, P.dev]);
+  exp(goa, 44, 'Flights (each own fare)', '✈️', 33400, P.meera, { [P.me]: 8200, [P.ravi]: 8200, [P.meera]: 7900, [P.dev]: 9100 }, 'exact');
+  exp(goa, 43, 'Hotel · 3 nights', '🏠', 24000, P.me, [P.me, P.ravi, P.meera, P.dev]);
+  exp(goa, 42, 'Scooter rental', '🚗', 1800, P.ravi, { [P.me]: 2, [P.ravi]: 1, [P.meera]: 1 }, 'shares');
+  exp(goa, 42, 'Seafood dinner', '🍽️', 3499.99, P.dev, [P.me, P.ravi, P.meera, P.dev]);
+  exp(goa, 41, 'Water sports (Dev skipped)', '🎬', 4500, P.meera, [P.me, P.ravi, P.meera]);
+  exp(goa, 41, 'Beach shack', '🍽️', 2750, P.ravi, { [P.me]: 40, [P.ravi]: 30, [P.meera]: 20, [P.dev]: 10 }, 'percent');
+  exp(goa, 40, 'Airport taxi', '🚗', 1600, P.me, [P.me, P.ravi, P.meera, P.dev]);
+  pay(goa, 38, P.dev, P.me, 3000); pay(goa, 37, P.ravi, P.meera, 2000);
+
+  // 3) Rent & bills — 3 months, different payers, shares for maid
+  const flat = mkBook('flat', 'Flat 4B', '🏠', 'INR', [P.me, P.ravi, P.priya]), three = [P.me, P.ravi, P.priya];
+  for (const [mi, d] of [[0, 85], [1, 55], [2, 25]]) {
+    exp(flat, d, 'Rent', '🏠', 36000, P.me, three);
+    exp(flat, d - 2, 'Electricity', '💡', Math.round(1800 + rnd() * 1200), P.ravi, three);
+    exp(flat, d - 3, 'WiFi', '💡', 1179, P.priya, three);
+    exp(flat, d - 3, 'Water', '💡', 300, P.ravi, three);
+    exp(flat, d - 4, 'Maid (Priya works from home)', '🏠', 3000, P.priya, { [P.me]: 1, [P.ravi]: 1, [P.priya]: 2 }, 'shares');
+    if (mi === 1) exp(flat, d - 5, 'Gas cylinder', '💡', 1150, P.priya, three);
+    if (mi < 2) { pay(flat, d - 8, P.ravi, P.me, 12000); pay(flat, d - 9, P.priya, P.me, 11500); }
+  }
+
+  // 4) Subscriptions — monthly shared / family plans + a personal one
+  const subs = mkBook('subs', 'Subscriptions', '🔁', 'INR', [P.me, P.ravi, P.meera, P.dev, P.priya]);
+  for (const d of [70, 40, 10]) {
+    exp(subs, d, 'Netflix', '🔁', 649, P.me, [P.me, P.ravi, P.meera, P.dev]);
+    exp(subs, d - 1, 'Spotify Family', '🔁', 179, P.ravi, [P.me, P.ravi, P.priya]);
+    exp(subs, d - 1, 'iCloud 50GB (mine)', '🔁', 75, P.me, [P.me]);
+    exp(subs, d - 2, 'YouTube Premium Family', '🔁', 189, P.meera, [P.me, P.meera, P.dev]);
+  }
+  pay(subs, 35, P.dev, P.me, 400); pay(subs, 33, P.priya, P.ravi, 60);
+
+  // 5) Loans & IOUs — lend, borrow, instalments, fully repaid
+  const loans = mkBook('loans', 'Loans & IOUs', '💸', 'INR', [P.me, P.ravi, P.meera, P.dev, P.priya]);
+  loan(loans, 120, P.me, P.ravi, 20000, 'Loan to Ravi');        pay(loans, 90, P.ravi, P.me, 5000); pay(loans, 60, P.ravi, P.me, 5000);
+  loan(loans, 100, P.dev, P.me, 3000, 'Borrowed from Dev');     pay(loans, 80, P.me, P.dev, 1000);
+  exp(loans, 50, 'Meera paid my clinic bill', '🏥', 1500, P.meera, { [P.me]: 1500 }, 'exact'); pay(loans, 45, P.me, P.meera, 1500);
+  loan(loans, 30, P.me, P.priya, 800, 'Lunch money for Priya'); pay(loans, 5, P.priya, P.me, 800);
+
+  // 6) Foreign currency — EUR weekend, awkward cents
+  const eu = mkBook('berlin', 'Berlin weekend', '✈️', 'EUR', [P.me, P.ravi, P.priya]);
+  exp(eu, 16, 'Airbnb', '🏠', 285.5, P.priya, [P.me, P.ravi, P.priya]);
+  exp(eu, 16, 'Train tickets', '🚗', 100.01, P.ravi, [P.me, P.ravi, P.priya]);
+  exp(eu, 15, 'Museum pass', '🎬', 45, P.me, { [P.me]: 15, [P.ravi]: 15, [P.priya]: 15 }, 'exact');
+  exp(eu, 15, 'Dinner', '🍽️', 128.9, P.priya, { [P.me]: 1, [P.ravi]: 1, [P.priya]: 2 }, 'shares');
+  exp(eu, 14, 'Beers', '🍽️', 33.3, P.me, [P.me, P.ravi, P.priya]);
+  touched();
+}
+function clearSampleData() {
+  for (const c of COLL) for (const id of Object.keys(S.doc[c])) if (isSample(id) && !S.doc[c][id].deleted)
+    S.doc[c][id] = { id, deleted: true, updatedAt: now(), bookId: S.doc[c][id].bookId };
+  touched();
 }
 
 /* ---- share balances ---- */
@@ -546,7 +652,8 @@ document.addEventListener('click', e => {
   else if (a === 'settings') settingsSheet();
   else if (a === 'sync-now') { if (!S.meta.wasSignedIn) { if (clientId()) settingsSheet(); else toast('Saved on this device · Google backup not enabled'); } else if (!navigator.onLine) toast('Offline — changes will sync later'); else sync(true).then(() => toast(S.sync.state === 'err' ? 'Sync failed: ' + S.sync.error : 'Synced ✓')); }
   else if (a === 'new-book') { const w = $('#wn'), p = me(); if (w && p && w.value.trim()) put('people', { ...p, name: w.value.trim() }); bookSheet(); }
-  else if (a === 'open-book') { S.ui.tab = 'entries'; go('book/' + d.id); }
+  else if (a === 'open-book') { S.ui.tab = 'entries'; S.ui.limit = 40; go('book/' + d.id); }
+  else if (a === 'more') { S.ui.limit += 40; render(); }
   else if (a === 'tab') { S.ui.tab = d.tab; render(); }
   else if (a === 'new-entry') entrySheet();
   else if (a === 'quick-add') entrySheet(null, null, (live('books').sort((x, y) => y.updatedAt - x.updatedAt)[0] || {}).id);

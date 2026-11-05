@@ -176,3 +176,8 @@ code{background:var(--soft);padding:1px 5px;border-radius:5px;font-size:12px}
 .sec-h .link{float:right;text-transform:none;letter-spacing:0}
 .empty .btn.sm{margin-top:14px}
 #app>main .addrow{margin:14px 0}
+
+.btn.more{display:block;margin:6px auto 0;color:var(--brand)}
+
+.top .grow~.pill .st-t{display:none}.top .grow~.pill .sync-dot{margin:0}.top .grow~.pill{padding:10px}
+.hero-row b+b{margin-top:0;font-size:15px;opacity:.9}
