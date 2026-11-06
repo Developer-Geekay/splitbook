@@ -429,6 +429,25 @@ function setLang(c) {
   LANG = c; S.meta.lang = c; persist(); _curs = null; try { document.documentElement.lang = c; } catch {}
   render();
 }
+
+/* ───────────────────────── small vector illustrations (inline SVG, theme-coloured) ───────────────────────── */
+function art(kind) {
+  const W = (inner, vb = '0 0 120 90') => `<svg class="art" viewBox="${vb}" aria-hidden="true" focusable="false">${inner}</svg>`;
+  switch (kind) {
+    case 'welcome': return W(`<ellipse class="a-soft" cx="60" cy="80" rx="42" ry="6"/><rect class="a-b" x="22" y="26" width="76" height="48" rx="12"/><path class="a-c" d="M22 40h76v-6a8 8 0 0 0-8-8H30a8 8 0 0 0-8 8z"/><rect class="a-w" x="68" y="46" width="30" height="16" rx="8"/><circle class="a-b" cx="79" cy="54" r="3.5"/><circle class="a-y" cx="36" cy="16" r="9"/><circle class="a-y2" cx="36" cy="16" r="4.5"/><circle class="a-y" cx="86" cy="12" r="6"/><path class="a-l" d="M50 56h10M50 64h18"/>`);
+    case 'split': return W(`<ellipse class="a-soft" cx="60" cy="80" rx="40" ry="6"/><circle class="a-b" cx="38" cy="38" r="20"/><circle class="a-c" cx="82" cy="38" r="20"/><path class="a-w" d="M54 38h12m-5-5 5 5-5 5" fill="none" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path class="a-b" d="M24 70q14-14 28 0z"/><path class="a-c" d="M68 70q14-14 28 0z"/>`);
+    case 'receipt': return W(`<ellipse class="a-soft" cx="60" cy="82" rx="36" ry="5"/><path class="a-w2" d="M34 10h52v62l-6.5-5-6.5 5-6.5-5-6.5 5-6.5-5-6.5 5-6.5-5-6.5 5z"/><path class="a-l" d="M44 26h32M44 38h32M44 50h18"/><circle class="a-y" cx="86" cy="62" r="11"/><circle class="a-y2" cx="86" cy="62" r="5"/>`);
+    case 'spark': return W(`<path class="a-dash" d="M6 62q14-4 24-14t22-4 24-18 22 4 14-8"/><circle class="a-b" cx="112" cy="26" r="4"/><path class="a-soft" d="M6 80h108"/>`, '0 0 120 90');
+    default: return '';
+  }
+}
+const ICONS = {
+  today: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8"/></svg>',
+  week: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
+  bill: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.6 2H4.4z"/><path d="M10 21a2.2 2.2 0 0 0 4 0"/></svg>',
+  worth: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 17l5-5.5 4 3.5 7.5-8.5"/><path d="M15 6.5h5v5"/></svg>',
+};
+
 /* ───────────────────────── in-app dialogs (no native confirm/alert/prompt/select) ───────────────────────── */
 function openLayer(html, cls = '') {
   hideToast(); let res; const done = new Promise(r => { res = r; });
@@ -504,9 +523,39 @@ const go = h => { location.hash = h; };
 
 /* ───────────────────────── UI: views ───────────────────────── */
 const statusPill = () => `<button class="pill" id="status" data-act="sync-now" aria-label="${eT("Sync status")}"></button>`;
+
+/* ───────────────────────── first-run setup (language · name · currency) ───────────────────────── */
+function needsSetup() {
+  if (S.meta.setup) return false;
+  const used = live('entries').length || live('books').some(b => !b.personal) || (me() && me().name !== 'Me') || S.meta.wasSignedIn;
+  if (used) { S.meta.setup = true; persist(); return false; }            // existing users never see it
+  return true;
+}
+function setupView() {
+  if (!S.ui.setupDraft) S.ui.setupDraft = { name: '', cur: (personalBook() || {}).currency || localeCurrency() };
+  const d = S.ui.setupDraft;
+  return `<main class="setup"><div class="setup-art">${art('welcome')}</div>
+    <h1>${eT('Welcome to SplitBook')}</h1><p class="setup-sub">${eT('Three quick things and you are ready.')}</p>
+    <div class="lbl">${eT('Language')}</div>
+    <div class="lang-grid" role="group" aria-label="${eT('Language')}">${LANGS.map(([c, nat, eng]) => `<button class="lg ${c === LANG ? 'on' : ''}" data-act="setlang" data-v="${c}" aria-pressed="${c === LANG}"><b>${esc(nat)}</b><small>${esc(eng)}</small></button>`).join('')}</div>
+    <label class="field"><span>${eT('Your name')}</span><input id="sn" value="${esc(d.name)}" maxlength="40" autocomplete="given-name" placeholder="${eT('Your name (optional)')}"></label>
+    <div class="field"><span>${eT('Currency')}</span><button class="curbtn" data-act="setup-cur"><b>${esc(symbol(d.cur))} ${d.cur}</b><small>${esc(curName(d.cur))}</small><i>›</i></button></div>
+    <button class="cta" data-act="setup-done">${eT('Get started')}</button>
+    <p class="note c">${eT('You can change all of this later in Settings.')}</p></main>`;
+}
+function finishSetup() {
+  const d = S.ui.setupDraft || {}, name = (d.name || '').trim(), m = me(), pb = personalBook();
+  if (name && m) put('people', { ...m, name });
+  if (pb && d.cur && pb.currency !== d.cur) put('books', { ...pb, currency: d.cur });
+  S.meta.lang = LANG; S.meta.setup = true; persist(); S.ui.setupDraft = null; render(); toast(T("You're all set"));
+}
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'sn') { e.preventDefault(); finishSetup(); } });
+document.addEventListener('input', e => { if (e.target && e.target.id === 'sn') { if (!S.ui.setupDraft) S.ui.setupDraft = { name: '', cur: localeCurrency() }; S.ui.setupDraft.name = e.target.value; } });
+
 function render() {
   const app = $('#app'); if (!app) return;
   if (!me()) ensureMe();
+  if (needsSetup()) { app.innerHTML = setupView(); return; }
   if (S.ui.view === 'book') {                       // book deleted here or on another device → go home
     const bk = S.doc.books[S.ui.bookId];
     if (!bk || bk.deleted) { S.ui.view = 'home'; S.ui.bookId = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); }
@@ -551,12 +600,51 @@ function dueBanner() {
   return `<button class="banner due" data-act="open-loans" data-id="${b.id}"><span>⏰</span><span><b>${esc(title)}</b><small>${fmt(r.out + r.intDebt, b.currency)} · ${esc(b.name)}</small></span><i>›</i></button>`;
 }
 
+
+/* ───────────────────────── dashboard: quick info + recent activity ───────────────────────── */
+function dashData() {
+  const today = isoDay(Date.now()), wk = isoDay(Date.now() - 6 * 864e5), cur = primaryCurrency(), m = me();
+  let t = 0, w = 0;
+  for (const r of costRows(cur)) { if (!r.cost) continue; if (r.date === today) t += r.cost; if (r.date >= wk && r.date <= today) w += r.cost; }
+  let next = null; const horizon = isoDay(Date.now() + 30 * 864e5), from = isoDay(Date.now() - 864e5);
+  for (const e of live('entries')) {
+    if (!e.repeat || !PERIOD[e.repeat] || e.type === 'income') continue;
+    const b = S.doc.books[e.bookId]; if (!b || b.deleted || b.currency !== cur) continue;
+    const mine = b.personal ? e.amount : ((m && e.split[m.id]) || 0); if (!mine) continue;
+    const d = nextDue(e, from); if (d && d <= horizon && (!next || d < next.d)) next = { d, e, mine, cur };
+  }
+  const any = live('entries').length > 0 || live('books').some(b => !b.personal);
+  return { cur, t, w, next, any, nw: any ? insightsData().netWorth : null };
+}
+function quickView() {
+  const D = dashData(), cur = D.cur;
+  const tile = (ico, label, val, sub, attrs, ph) => `<${attrs ? 'button' : 'div'} class="qt ${ph ? 'ph' : ''}" ${attrs || ''}><span class="qi">${ICONS[ico]}</span><span class="qm"><small>${esc(label)}</small><b>${val}</b><em>${esc(sub)}</em></span></${attrs ? 'button' : 'div'}>`;
+  const none = !D.any;
+  return `<div class="sec-h">${eT('At a glance')}</div><div class="qgrid">
+    ${tile('today', T('Today'), none ? '—' : esc(fmt(D.t, cur)), D.t ? T('spent so far') : T('Nothing spent yet'), 'data-act="open-personal"', none)}
+    ${tile('week', T('This week'), none ? '—' : esc(fmt(D.w, cur)), T('last 7 days'), 'data-act="open-personal"', none)}
+    ${tile('bill', T('Next bill'), D.next ? esc(fmt(D.next.mine, D.next.cur)) : '—', D.next ? D.next.e.desc + ' · ' + shortDate(D.next.d) : T('No bills coming up'), D.next ? `data-act="edit-entry" data-id="${D.next.e.id}"` : '', !D.next)}
+    ${tile('worth', T('Net worth'), D.nw === null ? '—' : esc(money(D.nw, cur)), T('My money + shared books'), 'data-act="open-insights"', none)}</div>`;
+}
+function recentView() {
+  const m = me(), list = live('entries').sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 5);
+  if (!list.length) return `<div class="sec-h">${eT('Recent activity')}</div><div class="card empty-art">${art('receipt')}<b>${eT('Your latest entries will show up here')}</b><p>${eT('Tap Add or the mic to start')}</p></div>`;
+  return `<div class="sec-h">${eT('Recent activity')}</div><div class="card pad recent">` + list.map(e => {
+    const b = S.doc.books[e.bookId] || {}, cur = b.currency || primaryCurrency(), isS = e.type === 'settle', inc = e.type === 'income';
+    const mn = b.personal ? (inc ? e.amount : -e.amount) : (m ? (e.paidBy === m.id ? e.amount : 0) - (e.split[m.id] || 0) : 0);
+    const right = mn === 0 ? `<span class="muted">—</span>` : `<b class="${mn > 0 ? 'pos' : 'neg'}">${mn > 0 ? '+' : '−'}${fmt(Math.abs(mn), cur)}</b>`;
+    return `<button class="mrow link-row" data-act="edit-entry" data-id="${e.id}"><span class="tx-ico sm ${isS || inc ? 'pay' : ''}">${isS ? '🤝' : esc(e.cat || (inc ? '💼' : '🧾'))}</span>
+      <div class="grow"><b>${esc(isS ? T('Payment') : (e.desc || T(inc ? 'Income' : 'Expense')))}</b><br><small class="muted">${esc(b.personal ? T('My money') : (b.name || ''))} · ${esc(dayLabel(e.date))}</small></div><span>${right}</span></button>`;
+  }).join('') + `</div>`;
+}
+
 function mySlide(pb) {
   if (!pb) return '';
   const cur = pb.currency, ym = isoDay(Date.now()).slice(0, 7), st = monthStats(pb.id, ym);
   return `<section class="hero alt"><div class="hero-l">${eT('My money')} · ${new Date().toLocaleDateString(LOC(), { month: 'long' })}</div>
     <div class="hero-n ${st.net < 0 ? 'neg' : ''}">${money(st.net, cur, true)}</div><div class="hero-s">${eT("left this month")}</div>
     <div class="hero-row"><div><span class="dot pos"></span>${eT("Income")}<b>${fmt(st.inc, cur)}</b></div><div><span class="dot neg"></span>${eT("Spent")}<b>${fmt(st.exp, cur)}</b></div></div>
+    ${bookEntries(pb.id).length ? '' : `<div class="hero-ph">${art('spark')}<span>${eT('Add your first income or expense')}</span></div>`}
     <div class="hero-links"><button data-act="open-personal">${eT("Activity")} ›</button><button data-act="open-insights">${eT("Net worth & insights")} ›</button></div></section>`;
 }
 function homeView() {
@@ -579,17 +667,16 @@ function homeView() {
       <div class="hero-row"><div><span class="dot pos"></span>${eT('Owed to you')}${cur.filter(c => tot[c].owed).map(c => `<b>${fmt(tot[c].owed, c)}</b>`).join('') || '<b>—</b>'}</div>
       <div><span class="dot neg"></span>${eT('You owe')}${cur.filter(c => tot[c].owe).map(c => `<b>${fmt(tot[c].owe, c)}</b>`).join('') || '<b>—</b>'}</div></div>
       <div class="hero-links"><button data-act="open-insights">${eT("Net worth & insights")} ›</button></div></section>`;
-  })() : (pb && bookEntries(PERSONAL_ID).length) ? `<section class="hero soft"><div class="hero-l">${eT("Shared balances")}</div><div class="hero-t">${eT("Split costs with friends")}</div>
+  })() : (pb && bookEntries(PERSONAL_ID).length) ? `<section class="hero soft"><div class="hero-art">${art('split')}</div><div class="hero-l">${eT("Shared balances")}</div><div class="hero-t">${eT("Split costs with friends")}</div>
       <p class="hero-p">${eT("Make a book for a trip, your flat or a group — add expenses and see who owes who")}.</p><div class="hero-links"><button data-act="new-book">＋ ${eT("New shared book")}</button><button data-act="open-insights">${eT("Net worth & insights")} ›</button></div></section>` : `<section class="hero welcome"><div class="hero-l">${eT("Welcome to SplitBook")}</div><div class="hero-t">${eT("Your money")},<br>${eT("on your own terms")}.</div>
       <ol class="steps"><li><i>1</i>${hT('Add income & expenses to {mm}', { mm: '<b>' + eT('My money') + '</b>' })}</li><li><i>2</i>${eT("Make a book to split costs with others")}</li><li><i>3</i>${eT("See who owes who and settle up")}</li></ol>
-      <div class="lang-chips" role="group" aria-label="${eT("Language")}">${LANGS.map(([c, nat]) => `<button data-act="setlang" data-v="${c}" class="${c === LANG ? 'on' : ''}">${esc(nat)}</button>`).join('')}</div>
-      ${(!m || m.name === 'Me') ? `<input id="wn" class="wn" placeholder="${eT("Your name (optional)")}" maxlength="40" autocomplete="given-name">` : ''}</section>`;
+</section>`;
   const backup = (S.meta.wasSignedIn || !clientId()) ? '' : `<button class="banner" data-act="settings"><span>☁️</span><span><b>${eT("Back up to Google Drive")}</b><small>${eT("Sync across devices. Works offline")}.</small></span><i>›</i></button>`;
   const name = (m && m.name !== 'Me' && m.name) || '';
   return `<header class="top"><div>${name ? `<small>${eT("Hi")},</small><h1>${esc(name)} 👋</h1>` : `<h1>${eT("Welcome")} 👋</h1>`}</div>${statusPill()}
       <button class="iconbtn" data-act="open-insights" aria-label="${eT("Net worth and insights")}">📊</button><button class="iconbtn" data-act="settings" aria-label="${eT("Settings")}">${m ? avatar(m.id) : '⚙️'}</button></header>
     <main><div class="sl-tabs" role="tablist"><button data-act="slide" data-i="0" class="${si === 0 ? 'on' : ''}">${eT("Overall")}</button><button data-act="slide" data-i="1" class="${si === 1 ? 'on' : ''}">${eT("My money")}</button></div>
-      <div class="slides" id="slides"><div class="slide">${hero}</div><div class="slide">${mySlide(pb)}</div></div>${dueBanner()}${backup}<div class="sec-h">${eT("Shared books")}</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>${books.length ? T("New book") : T("New shared book")}</b>${books.length ? '' : '<small class="muted">' + eT('Split costs with friends, a trip, your flat…') + '</small>'}</span></button></div></main>
+      <div class="slides" id="slides"><div class="slide">${hero}</div><div class="slide">${mySlide(pb)}</div></div>${dueBanner()}${backup}${quickView()}${recentView()}<div class="sec-h">${eT("Shared books")}</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>${books.length ? T("New book") : T("New shared book")}</b>${books.length ? '' : '<small class="muted">' + eT('Split costs with friends, a trip, your flat…') + '</small>'}</span></button></div></main>
     <div class="fabs"><button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button><button class="fab" data-act="quick-add" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button></div>`;
 }
 
@@ -892,6 +979,9 @@ function settingsSheet() {
     <div class="lbl">${eT('Language')}</div><button class="curbtn" data-x="lang"><b>${esc(langInfo()[1])}</b><small>${esc(langInfo()[2])}</small><i>›</i></button>
     <div class="lbl">${eT("Your name")}</div>
     <div class="addrow"><input id="myname" value="${esc((m || {}).name || '')}"><button class="btn" data-x="savename">${eT("Save")}</button></div>
+    <div class="lbl">${eT('Voice')}</div>
+    <div class="card pad togrow"><div class="grow"><b>${eT('Auto-detect spoken language')}</b><small>${eT('Understands any language, online or offline')} · ${eT('Coming soon')}</small></div><span class="switch" role="switch" aria-checked="false" aria-disabled="true" aria-label="${eT('Auto-detect spoken language')}"><i></i></span></div>
+    <p class="note">${eT('For now voice listens in your app language ({lang}).', { lang: langInfo()[1] })}</p>
     ${canInstall() ? `<div class="lbl">${eT("Install")}</div><div class="card pad acct"><b>📲 ${eT("Install SplitBook")}</b><p class="note">${eT("Add it to your home screen — opens full-screen and works offline")}.</p><button class="cta" data-x="install">${eT("Install app")}</button></div>` : ''}
     ${personalBook() ? `<div class="lbl">${eT("My money currency")}</div><button class="curbtn" data-x="pcur"><b>${esc(symbol(personalBook().currency))} ${personalBook().currency}</b><small>${esc(curName(personalBook().currency))}</small><i>›</i></button><p class="note">${eT("Keeps the same numbers — no exchange-rate conversion")}.</p>` : ''}
     <div class="lbl">${eT("Demo")}</div>
@@ -1062,7 +1152,7 @@ function voiceSave(P) {
 }
 function voiceSheet() {
   const SRc = speechCtor();
-  let vlang = LANG, listening = false, rec = null, P = null, txt = '', msg = '', saved = false;
+  let listening = false, rec = null, P = null, txt = '', msg = '', saved = false;
   const o = openSheet('<div id="vform"></div>'), root = $('#vform', o);
   sheetCleanup = () => { try { rec && rec.abort(); } catch {} };
   const ERR = { 'not-allowed': 'Microphone access is blocked. Allow it in your browser settings, or type instead.', 'service-not-allowed': 'Microphone access is blocked. Allow it in your browser settings, or type instead.',
@@ -1090,7 +1180,6 @@ function voiceSheet() {
   }
   function draw() {
     root.innerHTML = `<div class="sh-head"><h2>🎤 ${eT('Add by voice')}</h2><button class="iconbtn" data-x="close" aria-label="${eT('Close')}">✕</button></div>
-      <div class="lbl">${eT('Speaking')}</div><div class="pcs scroll">${LANGS.map(([c, nat]) => `<button class="pc ${c === vlang ? 'on' : ''}" data-x="vl" data-v="${c}"><span class="pn">${esc(nat)}</span></button>`).join('')}</div>
       <div class="mic-wrap"><button class="mic ${listening ? 'on' : ''}" data-x="mic" aria-label="${eT(listening ? 'Tap to stop' : 'Add by voice')}" ${SRc ? '' : 'disabled'}>🎤</button></div>
       <p class="vstate ${msg && !listening ? 'bad' : ''}" id="vstate">${esc(!SRc ? T("Voice input isn't supported in this browser — you can still type it below.") : listening ? T('Listening… speak now') : msg || T('Tap the mic and speak'))}</p>
       <div class="vtrans" id="vtrans">${txt ? '“' + esc(txt) + '”' : ''}</div>
@@ -1104,7 +1193,7 @@ function voiceSheet() {
     P = null; txt = ''; msg = ''; listening = true; draw();
     let gotFinal = false, errored = false;
     try { rec = new SRc(); } catch { listening = false; msg = T(ERR['audio-capture']); draw(); return; }
-    rec.lang = (LANGS.find(l => l[0] === vlang) || LANGS[0])[3]; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 3;
+    rec.lang = langInfo()[3]; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 3;
     rec.onresult = e => {
       let interim = '', fin = '', alts = [];
       for (let i = e.resultIndex || 0; i < e.results.length; i++) { const r = e.results[i]; if (r.isFinal) { fin += r[0].transcript; for (let k = 0; k < r.length; k++) alts.push(r[k].transcript); } else interim += r[0].transcript; }
@@ -1118,7 +1207,6 @@ function voiceSheet() {
     const t = e.target.closest('[data-x]'); if (!t) return; const x = t.dataset.x;
     if (x === 'close') closeSheet();
     else if (x === 'mic') startMic();
-    else if (x === 'vl') { vlang = t.dataset.v; draw(); }
     else if (x === 'vex') { finish(T(t.dataset.v)); }
     else if (x === 'vgo') { const v = $('#vtext', root).value.trim(); if (v) finish(v); }
     else if (x === 'vedit' && P) {
@@ -1382,7 +1470,9 @@ document.addEventListener('click', e => {
   else if (a === 'setlang') setLang(d.v);
   else if (a === 'settings') settingsSheet();
   else if (a === 'sync-now') { if (!S.meta.wasSignedIn) { if (clientId()) settingsSheet(); else toast(T('Saved on this device · Google backup not enabled')); } else if (!navigator.onLine) toast(T('Offline — changes will sync later')); else sync(true).then(() => toast(S.sync.state === 'err' ? T('Sync failed: {e}', { e: S.sync.error }) : T('Synced ✓'))); }
-  else if (a === 'new-book') { const w = $('#wn'), p = me(); if (w && p && w.value.trim()) put('people', { ...p, name: w.value.trim() }); bookSheet(); }
+  else if (a === 'new-book') bookSheet();
+  else if (a === 'setup-cur') pickCurrency(S.ui.setupDraft.cur).then(c => { if (c) { S.ui.setupDraft.cur = c; render(); } });
+  else if (a === 'setup-done') finishSetup();
   else if (a === 'open-book') { S.ui.tab = 'entries'; S.ui.limit = 40; go('book/' + d.id); }
   else if (a === 'more') { S.ui.limit += 40; render(); }
   else if (a === 'tab') { S.ui.tab = d.tab; render(); }

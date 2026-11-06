@@ -18,7 +18,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   ok((await p.$$('[data-act=add-income],[data-act=add-expense]')).length === 0 && (await p.$$('.hero.alt .btn')).length === 0, 'no "+ Income / − Expense" buttons on the dashboard any more');
   eq((await p.$$('.fab')).length, 1, 'one floating Add button is the single way to add');
   eq(await p.evaluate(() => $('#slides').scrollLeft), 0, 'brand-new user lands on slide 1 (welcome / overall)');
-  ok(await p.isVisible('#wn'), 'welcome card with the name field is on slide 1');
+  ok(/Your money/.test(await p.innerText('.slide:first-child')) && !(await p.$('#wn')), 'a welcome card with the three steps is on slide 1 (name/language/currency now live on the setup page)');
   await p.click('.sl-tabs button:nth-child(2)'); await p.waitForFunction(() => $('#slides').scrollLeft > 100);
   await p.waitForFunction(() => document.querySelectorAll('.sl-tabs button')[1].classList.contains('on') && Math.abs($('#slides').scrollLeft - slideStep($('#slides'))) < 3); ok(true, 'tapping "My money" slides over and highlights the tab');
   eq(await p.evaluate(() => localStorage.getItem('sb.slide')), '1', 'last slide is remembered');
@@ -40,7 +40,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   await p.evaluate(() => { const M = me().id; S.doc.books.sb = { id: 'sb', name: 'Flat', emoji: '🏠', currency: 'INR', memberIds: [M], createdAt: 1, updatedAt: now() }; touched(); });
   ok(await p.evaluate(() => /Overall balance/.test($('.slide:first-child').innerText)), 'with a shared book, slide 1 is the Overall balance');
   const d2 = await dev(), q = d2.p;
-  await q.evaluate(() => { localStorage.removeItem('sb.slide'); }); await q.fill('#wn', 'Priya');
+  await q.evaluate(() => { localStorage.removeItem('sb.slide'); });
   await q.click('.fab'); await q.fill('#ea', '40'); await q.click('[data-x=save]'); await q.reload(); await q.waitForSelector('.slides');
   ok(await q.evaluate(() => $('#slides').scrollLeft > 100), 'a user with only My money entries opens on the My money slide');
 

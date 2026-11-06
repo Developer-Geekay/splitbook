@@ -1,10 +1,11 @@
 const {chromium}=require('playwright');
-const assert=require('assert');const {start}=require('./serve');
+const assert=require('assert');const {start}=require('./serve');const {skipSetup}=require('./harness');
 (async()=>{
 const srv=await start();const URL='http://localhost:'+srv.address().port+'/index.html';const b=await chromium.launch();
 let driveFile=null; // fake Drive shared by both devices
 async function device(){
   const ctx=await b.newContext({viewport:{width:390,height:800},serviceWorkers:'block'});
+  await skipSetup(ctx);
   await ctx.addInitScript(()=>{window.google={accounts:{oauth2:{initTokenClient:c=>({requestAccessToken:()=>setTimeout(()=>c.callback({access_token:'tok',expires_in:3600}),10)}),revoke(){}}}};});
   await ctx.route('https://accounts.google.com/**',r=>r.fulfill({body:'',contentType:'text/javascript'}));
   await ctx.route('https://www.googleapis.com/**',async r=>{
@@ -37,7 +38,7 @@ const B=await device(); await B.p.click('.iconbtn[data-act=settings]'); await B.
 await B.p.waitForFunction(()=>document.body.innerText.includes('Goa trip'),null,{timeout:8000});
 console.log('B sees book; people on B:',await B.p.evaluate(()=>Object.values(S.doc.people).filter(x=>!x.deleted).map(x=>x.name)));
 // B edits offline, then A edits offline; both reconnect
-await B.p.click('text=Goa trip'); await B.ctx.setOffline(true);
+await B.p.click('.bk:has-text("Goa trip")'); await B.ctx.setOffline(true);
 await B.p.click('.fab'); await B.p.fill('#ed','Taxi'); await B.p.fill('#ea','40'); await B.p.click('[data-x=save]');
 await B.ctx.setOffline(false); await B.p.evaluate(()=>sync(true)); await B.p.waitForFunction(()=>document.querySelector('#status')?.textContent.includes('Synced'));
 await p.evaluate(()=>sync(true)); await p.waitForFunction(()=>Object.values(S.doc.entries).length===2,null,{timeout:8000});

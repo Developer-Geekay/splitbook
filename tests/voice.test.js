@@ -79,7 +79,7 @@ const I18N = new Function('window', fs.readFileSync(__dirname + '/../i18n.js', '
   const say = async (script, then) => { await p.evaluate(s => { window.__sr.script = s; }, script); await p.click('[data-x=mic]'); if (then !== false) await p.waitForSelector('.vprev, .vstate.bad', { timeout: 3000 }); };
   ok(await p.isVisible('.micfab') && (await p.$$('.fab')).length === 1, 'a 🎤 button sits next to the Add button on the dashboard');
   await p.click('.micfab'); await p.waitForSelector('#vform');
-  eq(await p.$$eval('#vform [data-x=vl]', e => e.map(x => x.textContent)), ['English', 'हिन्दी', 'বাংলা', 'मराठी', 'తెలుగు', 'தமிழ்'], 'choose the spoken language: all six');
+  ok(!(await p.$('#vform [data-x=vl]')) && !/Speaking/i.test(await p.innerText('#vform')), 'no language picker in voice mode — it listens in the app language');
   ok(/Tap the mic and speak/.test(await p.innerText('#vstate')) && (await p.$$('[data-x=vex]')).length === 4, 'idle: hint + 4 example phrases to tap');
   await say({ interim: ['lunch', 'lunch 250'], final: 'lunch 250 yesterday' });
   eq(await p.evaluate(() => window.__sr.list[0].lang), 'en-IN', 'recognition runs in the chosen language (en-IN)');
@@ -91,12 +91,13 @@ const I18N = new Function('window', fs.readFileSync(__dirname + '/../i18n.js', '
   ok(/Added Lunch · ₹250\.00/.test(await p.innerText('#toast')), 'confirmation toast');
   await p.click('#toast button'); eq(await p.evaluate(() => live('entries').filter(e => e.desc === 'Lunch').length), 0, 'Undo removes it');
 
-  await p.click('.micfab'); await p.click('#vform [data-x=vl][data-v=hi]'); await say({ final: 'वेतन 50000 मिला' });
-  eq(await p.evaluate(() => window.__sr.list[window.__sr.list.length - 1].lang), 'hi-IN', 'Hindi chip → recognition language hi-IN');
-  t = await p.innerText('.vprev'); ok(/\+₹50,000\.00/.test(t) && /वेतन/.test(t) && /Income/.test(t), 'Hindi speech → income preview: ' + t.replace(/\n+/g, ' | '));
+  await p.keyboard.press('Escape'); await p.evaluate(() => setLang('hi')); await p.click('.micfab'); await say({ final: 'वेतन 50000 मिला' });
+  eq(await p.evaluate(() => window.__sr.list[window.__sr.list.length - 1].lang), 'hi-IN', 'app language Hindi → recognition language hi-IN (no picker needed)');
+  t = await p.innerText('.vprev'); ok(/\+₹50,000\.00/.test(t) && /वेतन/.test(t) && /आय/.test(t), 'Hindi speech → income preview: ' + t.replace(/\n+/g, ' | '));
   await p.click('[data-x=vsave]'); let e2 = await p.evaluate(() => live('entries').find(e => e.type === 'income'));
   eq([e2.amount, e2.cat, e2.desc, e2.split], [5000000, '💼', 'वेतन', {}], 'income saved with no split');
 
+  await p.evaluate(() => setLang('en'));
   console.log('Shared books, loans, repeats');
   await p.evaluate(() => { const M = me().id; S.doc.people.r = { id: 'r', name: 'Ravi', updatedAt: 1 }; S.doc.people.m = { id: 'm', name: 'Meera', updatedAt: 1 };
     S.doc.books.g = { id: 'g', name: 'Goa trip', emoji: '🏖️', currency: 'INR', memberIds: [M, 'r', 'm'], createdAt: 1, updatedAt: now() }; touched(); });

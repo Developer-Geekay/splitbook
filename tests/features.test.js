@@ -2,6 +2,7 @@
 const { chromium } = require('playwright');
 const assert = require('assert');
 const { start } = require('./serve');
+const { skipSetup } = require('./harness');
 let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', m); };
 const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${JSON.stringify(a)}${JSON.stringify(a) === JSON.stringify(b) ? '' : ' (expected ' + JSON.stringify(b) + ')'}`);
 
@@ -10,6 +11,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   const b = await chromium.launch(); let drive = null;
   async function device(opts = {}) {
     const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', locale: 'en-IN', ...opts });
+  await skipSetup(ctx);
     await ctx.addInitScript(() => { window.google = { accounts: { oauth2: { initTokenClient: c => ({ requestAccessToken: () => setTimeout(() => c.callback({ access_token: 't', expires_in: 3600 }), 5) }), revoke() {} } } }; });
     await ctx.route('https://accounts.google.com/**', r => r.fulfill({ body: '', contentType: 'text/javascript' }));
     await ctx.route('**/config.js', r => r.fulfill({ body: 'window.SPLITBOOK_CONFIG={GOOGLE_CLIENT_ID:"x"}', contentType: 'text/javascript' }));

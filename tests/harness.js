@@ -12,8 +12,11 @@ function parseMultipart(req) {
   const mime = (dataPart.match(/^Content-Type:\s*([^\r\n]+)/i) || [])[1] || 'application/octet-stream';
   return { meta, mime, body: Buffer.from(dataPart.slice(dataPart.indexOf('\r\n\r\n') + 4), 'latin1') };
 }
+/* Brand-new browsers see the first-run setup page; most tests want to go straight to the app. */
+async function skipSetup(ctx) { await ctx.addInitScript(() => { try { if (!localStorage.getItem('sb.meta')) localStorage.setItem('sb.meta', JSON.stringify({ setup: true })); } catch {} }); }
 async function newDevice(browser, appUrl, drive, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: opts.width || 390, height: opts.height || 844 }, serviceWorkers: 'block', locale: opts.locale || 'en-IN', deviceScaleFactor: 1, ...(opts.ctx || {}) });
+  if (!opts.firstRun) await skipSetup(ctx);
   await ctx.addInitScript(o => {
     window.google = { accounts: { oauth2: { initTokenClient: c => ({ requestAccessToken: () => setTimeout(() => c.callback({ access_token: 't', expires_in: 3600 }), 5) }), revoke() {} } } };
     if (o.standalone) { const mm = window.matchMedia.bind(window); window.matchMedia = q => /display-mode:\s*standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} } : mm(q); }
@@ -45,7 +48,7 @@ function indicFontCss() {
 async function addIndicFonts(page) { await page.addStyleTag({ content: indicFontCss() }); }
 /* Run in the page: reports overlaps / sideways overflow inside the open sheet, picker or dialog. */
 const layoutDetect = () => {
-  const root = document.querySelector('.layer .sheet, .layer .dlg, .overlay .sheet'); if (!root) return ['no sheet'];
+  const root = document.querySelector('.layer .sheet, .layer .dlg, .overlay .sheet, .setup'); if (!root) return ['no sheet'];
   const out = [], sr = root.getBoundingClientRect(), scroller = e => { for (let n = e.parentElement; n && n !== root; n = n.parentElement) { const o = getComputedStyle(n).overflowX; if (o === 'auto' || o === 'scroll') return true; } return false; };
   const els = [...root.querySelectorAll('input:not([type=checkbox]):not([type=file]),button,select,textarea,label.rc,.cur-row,.pc,.who label')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; });
   const nm = e => (e.id || e.dataset.x || e.className || e.tagName).toString().slice(0, 24);
@@ -56,4 +59,4 @@ const layoutDetect = () => {
   const a = document.querySelector('#ea'); if (a && a.scrollWidth > a.clientWidth + 1) out.push('AMOUNT clipped');
   return out;
 };
-module.exports = { makeDrive, newDevice, signIn, addIndicFonts, layoutDetect };
+module.exports = { makeDrive, newDevice, signIn, addIndicFonts, layoutDetect, skipSetup };

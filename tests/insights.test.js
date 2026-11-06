@@ -2,6 +2,7 @@
 const { chromium } = require('playwright');
 const assert = require('assert');
 const { start } = require('./serve');
+const { skipSetup } = require('./harness');
 let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', m); };
 const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${JSON.stringify(a)}${JSON.stringify(a) === JSON.stringify(b) ? '' : ' (expected ' + JSON.stringify(b) + ')'}`);
 const near = (a, b, m, tol = 1) => ok(Math.abs(a - b) <= tol, `${m} → ${a} (expected ${b})`);
@@ -9,6 +10,7 @@ const near = (a, b, m, tol = 1) => ok(Math.abs(a - b) <= tol, `${m} → ${a} (ex
 (async () => {
   const srv = await start(), URL = 'http://localhost:' + srv.address().port + '/index.html';
   const b = await chromium.launch(), ctx = await b.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', locale: 'en-IN' });
+  await skipSetup(ctx);
   const p = await ctx.newPage(); const errors = []; p.on('pageerror', e => errors.push(e.message)); await p.goto(URL);
 
   // ----- a life with known numbers (major units ×100). asOf = 15 Nov 2026 -----

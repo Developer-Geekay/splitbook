@@ -309,3 +309,37 @@ body{line-height:1.5}.hero-n,.mm-n{line-height:1.15}
 .vp-meta{display:flex;flex-wrap:wrap;gap:4px 14px;margin:8px 0 2px;color:var(--muted);font-size:13.5px}
 .pc.ex{font-weight:500}.vprev .btns{margin-top:12px}
 .mic-wrap{padding:16px 0 14px}
+
+/* ---- vector art ---- */
+.art{width:100%;height:auto;display:block}
+.art .a-b{fill:var(--brand)}.art .a-c{fill:var(--brand2)}.art .a-y{fill:#fbbf24}.art .a-y2{fill:#f59e0b}.art .a-w{fill:#fff;stroke:#fff}
+.art .a-w2{fill:var(--card);stroke:var(--line);stroke-width:2}.art .a-l{stroke:var(--line);stroke-width:3.5;stroke-linecap:round;fill:none}
+.art .a-soft{fill:var(--soft)}.art .a-dash{fill:none;stroke:var(--brand);stroke-width:3;stroke-dasharray:5 7;stroke-linecap:round;opacity:.7}
+.hero .art .a-soft{fill:rgba(255,255,255,.14)}.hero .art .a-dash{stroke:#fff;opacity:.55}.hero .art .a-b{fill:#fff}
+.hero-art{position:absolute;right:14px;bottom:10px;width:92px;opacity:.95;pointer-events:none}
+.hero.soft{padding-right:110px}.hero.soft .hero-links{position:relative;z-index:1}
+.hero-ph{display:flex;align-items:center;gap:10px;margin-top:10px}.hero-ph .art{width:70px;flex:none}.hero-ph span{font-size:13.5px;opacity:.85}
+/* ---- at a glance ---- */
+.qgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.qt{display:flex;align-items:center;gap:11px;min-width:0;text-align:left;background:var(--card);box-shadow:var(--sh);border-radius:18px;padding:12px}
+.qt.ph{background:transparent;box-shadow:none;border:1.5px dashed var(--line)}.qt.ph b{color:var(--muted)}
+.qi{width:38px;height:38px;border-radius:12px;background:color-mix(in srgb,var(--brand) 13%,var(--card));display:grid;place-items:center;flex:none}
+.qi svg{width:21px;height:21px;fill:none;stroke:var(--brand);stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.qt:nth-child(2) .qi{background:color-mix(in srgb,#10b981 14%,var(--card))}.qt:nth-child(2) .qi svg{stroke:#059669}
+.qt:nth-child(3) .qi{background:color-mix(in srgb,#f59e0b 16%,var(--card))}.qt:nth-child(3) .qi svg{stroke:#d97706}
+.qt:nth-child(4) .qi{background:color-mix(in srgb,var(--brand2) 14%,var(--card))}.qt:nth-child(4) .qi svg{stroke:var(--brand2)}
+.qm{min-width:0;display:flex;flex-direction:column}.qm small{color:var(--muted);font-size:12px;font-weight:600}
+.qm b{font-size:16px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qm em{font-style:normal;color:var(--muted);font-size:12px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.recent{padding:2px 14px}.empty-art{padding:18px 16px 20px;text-align:center}.empty-art .art{width:104px;margin:0 auto 6px}.empty-art b{display:block}.empty-art p{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+/* ---- first-run setup ---- */
+.setup{padding:calc(24px + env(safe-area-inset-top)) 0 40px;max-width:440px;margin:0 auto}
+.setup-art{width:150px;margin:0 auto 6px}.setup h1{text-align:center;margin:6px 0 4px;font-size:26px;letter-spacing:-.02em}.setup-sub{text-align:center;color:var(--muted);margin:0 0 18px}
+.lang-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:16px}
+.lg{display:flex;flex-direction:column;align-items:flex-start;padding:10px 14px;border-radius:16px;background:var(--card);box-shadow:var(--sh);border:1.5px solid transparent;min-width:0}
+.lg b{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}.lg small{color:var(--muted);font-size:12px}
+.lg.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 11%,var(--card))}
+.setup .cta{margin-top:6px}
+/* ---- settings: disabled switch ---- */
+.togrow{display:flex;align-items:center;gap:12px;padding:12px 14px}.togrow b{display:block;font-size:15px}.togrow small{color:var(--muted);font-size:12.5px;line-height:1.35}
+.switch{width:46px;height:28px;border-radius:99px;background:var(--line);position:relative;flex:none;opacity:.7}.switch i{position:absolute;left:3px;top:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.switch[aria-disabled=true]{cursor:not-allowed}

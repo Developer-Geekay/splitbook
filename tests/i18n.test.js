@@ -47,10 +47,10 @@ const collect = () => { const at = [...document.querySelectorAll('[placeholder],
   const T1 = await dev({ locale: 'ta-IN' }); eq(await T1.p.evaluate(() => [LANG, document.documentElement.lang]), ['ta', 'ta'], 'a Tamil phone opens in Tamil automatically');
   ok(/[஀-௿]/.test(await T1.p.innerText('#app')), 'and really renders Tamil text');
   const F1 = await dev({ locale: 'fr-FR' }); eq(await F1.p.evaluate(() => LANG), 'en', 'an unsupported language falls back to English');
-  const D1 = await dev({ locale: 'en-IN' }), p = D1.p;
-  ok((await p.$$('.lang-chips button')).length === 6, 'the welcome card offers all six languages as one-tap chips');
-  await p.click('.lang-chips button[data-v=hi]'); await p.waitForFunction(() => LANG === 'hi'); ok(/स्वागत|आपका पैसा/.test(await p.innerText('#app')), 'tapping हिन्दी switches the whole screen at once');
-  await p.reload(); await p.waitForSelector('.slides'); eq(await p.evaluate(() => LANG), 'hi', 'the choice survives a reload');
+  const D1 = await dev({ locale: 'en-IN', firstRun: true }), p = D1.p;
+  ok((await p.$$('.setup .lg')).length === 6, 'the first-run setup page offers all six languages as one-tap tiles');
+  await p.click('.setup .lg[data-v=hi]'); await p.waitForFunction(() => LANG === 'hi'); ok(/स्वागत|आपका पैसा/.test(await p.innerText('#app')), 'tapping हिन्दी switches the whole screen at once');
+  await p.click('[data-act=setup-done]'); await p.waitForSelector('.slides'); await p.reload(); await p.waitForSelector('.slides'); eq(await p.evaluate(() => LANG), 'hi', 'the choice survives a reload');
   await p.click('.top .iconbtn[data-act=settings]'); ok(/भाषा/.test(await p.innerText('.sheet')), 'Settings has a Language row');
   await p.click('[data-x=lang]'); const rows = await p.$$eval('.layer .cur-row b', e => e.map(x => x.textContent)); eq(rows, ['English', 'हिन्दी', 'বাংলা', 'मराठी', 'తెలుగు', 'தமிழ்'], 'the picker lists each language in its own script');
   await p.click('.layer .cur-row[data-v=te]'); await p.waitForFunction(() => LANG === 'te'); ok(/[ఀ-౿]/.test(await p.innerText('.sheet')), 'picking తెలుగు updates the open Settings sheet');
