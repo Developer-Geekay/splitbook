@@ -74,7 +74,7 @@ const I18N = new Function('window', fs.readFileSync(__dirname + '/../i18n.js', '
   };
   const srv = await start(), URL = 'http://localhost:' + srv.address().port + '/index.html';
   const b = await chromium.launch(), devs = [];
-  const dev = async o => { const d = await newDevice(b, URL, makeDrive(), o); devs.push(d); return d; };
+  const dev = async o => { const d = await newDevice(b, URL, makeDrive(), { voiceUi: true, ...o }); devs.push(d); return d; };
   const A = await dev({ init: FAKE }), p = A.p;
   const say = async (script, then) => { await p.evaluate(s => { window.__sr.script = s; }, script); await p.click('[data-x=mic]'); if (then !== false) await p.waitForSelector('.vprev, .vstate.bad', { timeout: 3000 }); };
   ok(await p.isVisible('.micfab') && (await p.$$('.fab')).length === 1, 'a 🎤 button sits next to the Add button on the dashboard');

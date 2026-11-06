@@ -742,7 +742,7 @@ function homeView() {
       <button class="iconbtn" data-act="open-insights" aria-label="${eT("Net worth and insights")}">📊</button><button class="iconbtn" data-act="settings" aria-label="${eT("Settings")}">${m ? avatar(m.id) : '⚙️'}</button></header>
     <main><div class="sl-tabs" role="tablist"><button data-act="slide" data-i="0" class="${si === 0 ? 'on' : ''}">${eT("Overall")}</button><button data-act="slide" data-i="1" class="${si === 1 ? 'on' : ''}">${eT("My money")}</button></div>
       <div class="slides" id="slides"><div class="slide">${hero}</div><div class="slide">${mySlide(pb)}</div></div>${dueBanner()}${backup}${quickView()}${recentView()}<div class="sec-h">${eT("Shared books")}</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>${books.length ? T("New book") : T("New shared book")}</b>${books.length ? '' : '<small class="muted">' + eT('Split costs with friends, a trip, your flat…') + '</small>'}</span></button></div></main>
-    <div class="fabs"><button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button><button class="fab" data-act="quick-add" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button></div>`;
+    <div class="fabs">${window.SB_VOICE_BUTTON ? `<button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button>` : ''}<button class="fab" data-act="quick-add" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button></div>`;
 }
 
 function personalView(b) {
@@ -778,7 +778,7 @@ function personalView(b) {
   return `<header class="top"><button class="iconbtn" data-act="back" aria-label="${eT("Back")}">‹</button><div class="grow"><h1>👛 ${eT("My money")}</h1></div>${statusPill()}
     <button class="iconbtn" data-act="settings" aria-label="${eT("Settings")}">⚙️</button></header>
     <main>${hero}<div class="tabs" role="tablist">${tabs}</div>${body}</main>
-    <div class="fabs"><button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button><button class="fab" data-act="new-entry" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button></div>`;
+    <div class="fabs">${window.SB_VOICE_BUTTON ? `<button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button>` : ''}<button class="fab" data-act="new-entry" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button></div>`;
 }
 
 function bookView() {
@@ -823,7 +823,7 @@ function bookView() {
   return `<header class="top"><button class="iconbtn" data-act="back" aria-label="${eT("Back")}">‹</button><div class="grow"><h1>${esc(b.emoji || '📒')} ${esc(b.name)}</h1></div>${statusPill()}
     <button class="iconbtn" data-act="settings" aria-label="${eT("Settings")}">⚙️</button></header>
     <main>${hero}<div class="tabs" role="tablist">${tabs}</div>${body}</main>
-    ${tab === 'entries' || tab === 'balances' ? `<div class="fabs"><button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button><button class="fab" data-act="new-entry" aria-label="${eT("Add expense")}"><i>＋</i><span>${eT("Add expense")}</span></button></div>` : ''}`;
+    ${tab === 'entries' || tab === 'balances' ? `<div class="fabs">${window.SB_VOICE_BUTTON ? `<button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button>` : ''}<button class="fab" data-act="new-entry" aria-label="${eT("Add expense")}"><i>＋</i><span>${eT("Add expense")}</span></button></div>` : ''}`;
 }
 
 /* ───────────────────────── UI: sheets ───────────────────────── */
@@ -836,7 +836,7 @@ function openSheet(html) {
   o.addEventListener('pointerdown', e => { if (e.target === o) closeSheet(); });
   document.body.appendChild(o); document.body.classList.add('noscroll'); return o;
 }
-function closeSheet() { if (sheetCleanup) { const f = sheetCleanup; sheetCleanup = null; f(); } const o = $('.overlay'); if (o) { o.remove(); document.body.classList.remove('noscroll'); if (pendingReload) location.reload(); } }
+function closeSheet() { if (sheetCleanup) { const f = sheetCleanup; sheetCleanup = null; f(); } const o = $('.overlay'); if (o) { o.remove(); document.body.classList.remove('noscroll'); } }
 document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; const top = [...document.querySelectorAll('.layer')].pop(); if (top) top._close(null); else closeSheet(); });
 
 /* ---- book form ---- */
@@ -1054,6 +1054,9 @@ function settingsSheet() {
     <p class="note">${eT('For now voice listens in your app language ({lang}).', { lang: langInfo()[1] })}</p>
     ${canInstall() ? `<div class="lbl">${eT("Install")}</div><div class="card pad acct"><b>📲 ${eT("Install SplitBook")}</b><p class="note">${eT("Add it to your home screen — opens full-screen and works offline")}.</p><button class="cta" data-x="install">${eT("Install app")}</button></div>` : ''}
     ${personalBook() ? `<div class="lbl">${eT("My money currency")}</div><button class="curbtn" data-x="pcur"><b>${esc(symbol(personalBook().currency))} ${personalBook().currency}</b><small>${esc(curName(personalBook().currency))}</small><i>›</i></button><p class="note">${eT("Keeps the same numbers — no exchange-rate conversion")}.</p>` : ''}
+    <div class="lbl">${eT('App updates')}</div>
+    <div class="card pad"><p class="note" id="verline">${eT('Installed app not showing the latest changes? Check for an update, or reset the app cache. Your data stays safe.')}</p>
+      <div class="btns two" style="flex-direction:column"><button class="btn" data-x="upd-check">${eT('Check for updates')}</button><button class="btn" data-x="upd-reset">${eT('Reset app cache')}</button></div></div>
     <div class="lbl">${eT("Demo")}</div>
     <div class="card pad"><p class="note">${eT("Fill the app with realistic example books — daily spends, a trip, rent & bills, subscriptions, loans and a EUR weekend — to see how everything works")}.</p>
       <div class="btns two" style="margin:8px 0"><button class="btn" data-x="${hasSample() ? 'sample-clear' : 'sample-load'}">${hasSample() ? T("Remove sample data") : T("Load sample data")}</button></div></div>
@@ -1071,6 +1074,8 @@ function settingsSheet() {
     else if (x === 'n-on') { await setNotif(!(S.meta.notif && S.meta.notif.on && notifGranted())); settingsSheet(); }
     else if (x === 'n-bills' || x === 'n-loans' || x === 'n-activity') { const k = x.slice(2); S.meta.notif = { ...S.meta.notif, [k]: S.meta.notif[k] === false }; persist(); checkAlerts(true); settingsSheet(); }
     else if (x === 'n-test') { showNote({ key: 'test:' + now(), title: T('Notifications are on'), body: T('You will be reminded about bills, dues and payments.') }); }
+    else if (x === 'upd-check') { const r = await checkForUpdate(); if (r === 'found') closeSheet(); else toast(r === 'offline' ? T('You are offline') : T("You're on the latest version")); }
+    else if (x === 'upd-reset') { if (await askConfirm({ title: T('Reset app cache?'), message: T('This clears the saved app files and reloads the latest version. Your books and entries are not deleted.'), ok: T('Reset') })) resetAppCache(); }
     else if (x === 'savename') { const n = $('#myname', o).value.trim(); if (m && n) { put('people', { ...m, name: n }); toast(T('Saved')); } }
     else if (x === 'sample-load') { closeSheet(); loadSampleData(); go(''); toast(T('Sample data loaded')); }
     else if (x === 'sample-clear') { closeSheet(); clearSampleData(); go(''); toast(T('Sample data removed')); }
@@ -1600,17 +1605,35 @@ window.addEventListener('focus', () => sync(false));
 window.addEventListener('storage', e => { if (e.key === 'sb.doc') { S.doc = jget('sb.doc', S.doc); render(); } });
 
 /* ───────────────────────── boot ───────────────────────── */
-let pendingReload = false;
+let swReg = null, updating = false;
+function showUpdate(worker) {
+  if ($('#upd')) return;
+  const d = document.createElement('div'); d.id = 'upd'; d.setAttribute('role', 'status');
+  d.innerHTML = `<span>🔄</span><div class="grow"><b>${eT('A new version is ready')}</b><small>${eT('Update to get the latest changes. Your data is not affected.')}</small></div><button class="btn" data-x="later">${eT('Later')}</button><button class="btn primary" data-x="go">${eT('Update')}</button>`;
+  d.addEventListener('click', e => { const x = e.target.closest('[data-x]'); if (!x) return; if (x.dataset.x === 'later') d.remove(); else { updating = true; d.querySelector('[data-x=go]').disabled = true; (worker || (swReg && swReg.waiting)).postMessage('SKIP_WAITING'); setTimeout(() => { if (updating) location.reload(); }, 4000); } });
+  document.body.appendChild(d);
+}
+async function checkForUpdate() {
+  if (!swReg) return 'none';
+  try { await swReg.update(); } catch { return 'offline'; }
+  if (swReg.waiting) { showUpdate(swReg.waiting); return 'found'; }
+  return swReg.installing ? 'found' : 'latest';
+}
+async function appVersion() { try { const k = (await caches.keys()).find(x => x.startsWith('splitbook-')); return k ? k.slice(10) : ''; } catch { return ''; } }
+async function resetAppCache() {
+  try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch {}
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+  updating = true; location.reload();
+}
 if ('serviceWorker' in navigator) {
-  const hadController = !!navigator.serviceWorker.controller; let reloading = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!hadController || reloading) return;               // first install: nothing to refresh
-    if ($('.overlay')) { pendingReload = true; return; }   // don't interrupt an open form
-    reloading = true; location.reload();
-  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (updating) location.reload(); });
   navigator.serviceWorker.register('sw.js').then(reg => {
-    reg.update().catch(() => {});
+    swReg = reg; reg.update().catch(() => {});
+    const watch = w => w && w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) showUpdate(w); });
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdate(reg.waiting);
+    reg.addEventListener('updatefound', () => watch(reg.installing));
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    setInterval(() => reg.update().catch(() => {}), 30 * 60e3);
   }).catch(e => console.warn('sw', e));
 }
 ensureMe(); ensurePersonal(); route(); materializeRecurring(); checkAlerts(true);

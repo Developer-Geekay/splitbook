@@ -17,6 +17,7 @@ async function skipSetup(ctx) { await ctx.addInitScript(() => { try { if (!local
 async function newDevice(browser, appUrl, drive, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: opts.width || 390, height: opts.height || 844 }, serviceWorkers: 'block', locale: opts.locale || 'en-IN', deviceScaleFactor: 1, ...(opts.ctx || {}) });
   if (!opts.firstRun) await skipSetup(ctx);
+  if (opts.voiceUi) await ctx.addInitScript(() => { window.SB_VOICE_BUTTON = true; });
   await ctx.addInitScript(o => {
     window.google = { accounts: { oauth2: { initTokenClient: c => ({ requestAccessToken: () => setTimeout(() => c.callback({ access_token: 't', expires_in: 3600 }), 5) }), revoke() {} } } };
     if (o.standalone) { const mm = window.matchMedia.bind(window); window.matchMedia = q => /display-mode:\s*standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} } : mm(q); }
