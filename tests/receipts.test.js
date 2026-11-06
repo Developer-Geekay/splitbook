@@ -47,7 +47,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   await p.setInputFiles('#rfile', { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
   await p.waitForFunction(() => /Only photos and PDFs/.test(document.querySelector('#toast').innerText)); ok(true, 'other file types are refused');
   eq((await p.$$('.rc-th')).length, 1, 'only the valid PDF was added');
-  for (let i = 0; i < 6; i++) { if (await p.$('#rfile')) await p.setInputFiles('#rfile', { name: `r${i}.pdf`, mimeType: 'application/pdf', buffer: pdf }); }
+  for (let i = 0; i < 6; i++) { const n0 = (await p.$$('.rc-th')).length; if (await p.$('#rfile')) { await p.setInputFiles('#rfile', { name: `r${i}.pdf`, mimeType: 'application/pdf', buffer: pdf }); await p.waitForFunction(n => document.querySelectorAll('.rc-th').length > n, n0); } }
   eq((await p.$$('.rc-th')).length, 6, 'at most 6 receipts per entry');
   ok(!(await p.$('#rfile')) && !(await p.$('#rcam')), 'Add buttons disappear at the limit');
   const before = (await idbRecs(p)).length;

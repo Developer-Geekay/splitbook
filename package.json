@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "start": "node tests/serve.js",
-    "check": "node --check app.js && node --check i18n.js && node --check sw.js",
-    "test": "node tests/e2e.test.js && node tests/scenarios.test.js && node tests/features.test.js && node tests/personal.test.js && node tests/ui.test.js && node tests/insights.test.js && node tests/receipts.test.js && node tests/shell.test.js && node tests/i18n.test.js"
+    "check": "node --check app.js && node --check i18n.js && node --check voice.js && node --check sw.js",
+    "test": "node tests/e2e.test.js && node tests/scenarios.test.js && node tests/features.test.js && node tests/personal.test.js && node tests/ui.test.js && node tests/insights.test.js && node tests/receipts.test.js && node tests/shell.test.js && node tests/i18n.test.js && node tests/voice.test.js"
   },
   "devDependencies": {
     "@fontsource/noto-sans-bengali": "^5.3.0",

@@ -41,7 +41,7 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
         run: |
           mkdir _site
-          cp -r index.html app.js i18n.js styles.css sw.js \
+          cp -r index.html app.js i18n.js voice.js styles.css sw.js \
                 manifest.webmanifest icons _site/
           printf 'window.SPLITBOOK_CONFIG = { GOOGLE_CLIENT_ID: "%s" };\n' "$GOOGLE_CLIENT_ID" > _site/config.js
           sed -i "s/splitbook-v1/splitbook-${GITHUB_SHA::8}/" _site/sw.js

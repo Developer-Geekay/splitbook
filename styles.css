@@ -160,7 +160,7 @@ code{background:var(--soft);padding:1px 5px;border-radius:5px;font-size:12px}
 /* toast */
 #toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translate(-50%,16px);opacity:0;display:flex;align-items:center;gap:14px;
   background:#1c1c2e;color:#fff;padding:12px 18px;border-radius:16px;z-index:50;transition:.25s;pointer-events:none;max-width:92vw;font-size:14px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.3)}
-#toast.show{opacity:1;transform:translate(-50%,0)}#toast.act{pointer-events:auto}
+#toast.show{opacity:1;transform:translate(-50%,0)}#toast.act.show{pointer-events:auto}   /* only a *visible* Undo toast may take taps */
 #toast button{color:#a5b4fc;font-weight:700}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -291,3 +291,21 @@ select{width:100%;padding:13px 14px;border-radius:14px;border:1.5px solid transp
 body{line-height:1.5}.hero-n,.mm-n{line-height:1.15}
 .tabs button{flex:1 1 0;min-width:0;padding:9px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:clamp(12px,3.7vw,14px)}
 .sl-tabs button{white-space:nowrap}
+
+/* ---- floating actions: mic + Add ---- */
+.fabs{position:fixed;right:max(16px,calc(50% - 264px));bottom:calc(18px + env(safe-area-inset-bottom));z-index:6;display:flex;align-items:center;gap:10px}
+.fabs .fab{position:static}
+.micfab{width:54px;height:54px;border-radius:50%;background:var(--card);border:1.5px solid var(--line);box-shadow:0 8px 22px rgba(0,0,0,.18);font-size:22px;display:grid;place-items:center}
+/* ---- voice sheet ---- */
+.mic-wrap{display:grid;place-items:center;padding:8px 0 4px}
+.mic{width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--brand2));font-size:40px;color:#fff;box-shadow:0 10px 30px rgba(79,70,229,.4);display:grid;place-items:center}
+.mic.on{animation:micpulse 1.3s infinite}.mic:disabled{opacity:.35}
+@keyframes micpulse{0%{box-shadow:0 0 0 0 rgba(79,70,229,.55)}70%{box-shadow:0 0 0 28px rgba(79,70,229,0)}100%{box-shadow:0 0 0 0 rgba(79,70,229,0)}}
+.vstate{text-align:center;color:var(--muted);font-size:14.5px;margin:8px 2px 4px}.vstate.bad{color:var(--neg);font-weight:600}
+.vtrans{min-height:28px;text-align:center;font-size:18px;font-weight:600;margin:2px 0 10px;word-break:break-word}
+.vprev{padding:14px 16px;margin:12px 0 14px}.vp-h{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.vp-amt{font-size:34px;font-weight:800;letter-spacing:-.02em;margin:6px 0 4px;font-variant-numeric:tabular-nums}
+.vp-desc{display:flex;gap:10px;align-items:center;min-width:0}.vp-desc b{overflow:hidden;text-overflow:ellipsis}
+.vp-meta{display:flex;flex-wrap:wrap;gap:4px 14px;margin:8px 0 2px;color:var(--muted);font-size:13.5px}
+.pc.ex{font-weight:500}.vprev .btns{margin-top:12px}
+.mic-wrap{padding:16px 0 14px}

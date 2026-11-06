@@ -13,6 +13,11 @@ const LANGS = ['hi', 'bn', 'mr', 'te', 'ta'], NAMES = { hi: 'Hindi', bn: 'Bengal
 function appKeys() {
   const src = fs.readFileSync(__dirname + '/../app.js', 'utf8'), ast = acorn.parse(src, { ecmaVersion: 'latest' }), keys = new Set();
   const lit = n => { if (!n) return; if (n.type === 'Literal' && typeof n.value === 'string') keys.add(n.value); else if (n.type === 'ConditionalExpression') { lit(n.consequent); lit(n.alternate); } else if (n.type === 'LogicalExpression') { lit(n.left); lit(n.right); } else if (n.type === 'TemplateLiteral' && !n.expressions.length) keys.add(n.quasis[0].value.cooked); };
+  walk.simple(ast, { VariableDeclarator(n) {                      // strings that reach T() indirectly (arrays / lookup tables)
+    if (n.id.type !== 'Identifier' || !n.init) return;
+    if (n.id.name === 'VOICE_EXAMPLES') n.init.elements.forEach(lit);
+    if (n.id.name === 'ERR') n.init.properties.forEach(pr => lit(pr.value));
+  } });
   walk.simple(ast, { CallExpression(n) { const c = n.callee; if (c.type !== 'Identifier') return; if (['T', 'eT', 'hT'].includes(c.name)) lit(n.arguments[0]); if (c.name === 'Tn') { lit(n.arguments[1]); lit(n.arguments[2]); } } });
   ['week', 'month', 'year', 'Language', 'Language changed', 'you', 'last sync'].forEach(k => keys.add(k));
   for (const m of src.match(/const (?:CATS|INCOME_CATS) = \[.*\];/g)) for (const x of m.match(/'([A-Za-z ]+)'\]/g) || []) keys.add(x.slice(1, -2));

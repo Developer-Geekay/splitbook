@@ -431,7 +431,7 @@ function setLang(c) {
 }
 /* ───────────────────────── in-app dialogs (no native confirm/alert/prompt/select) ───────────────────────── */
 function openLayer(html, cls = '') {
-  let res; const done = new Promise(r => { res = r; });
+  hideToast(); let res; const done = new Promise(r => { res = r; });
   const el = document.createElement('div'); el.className = 'layer ' + cls; el.innerHTML = html;
   const close = v => { if (el.isConnected) { el.remove(); res(v); } };
   el._close = close; el.addEventListener('pointerdown', e => { if (e.target === el) close(null); });
@@ -590,7 +590,7 @@ function homeView() {
       <button class="iconbtn" data-act="open-insights" aria-label="${eT("Net worth and insights")}">📊</button><button class="iconbtn" data-act="settings" aria-label="${eT("Settings")}">${m ? avatar(m.id) : '⚙️'}</button></header>
     <main><div class="sl-tabs" role="tablist"><button data-act="slide" data-i="0" class="${si === 0 ? 'on' : ''}">${eT("Overall")}</button><button data-act="slide" data-i="1" class="${si === 1 ? 'on' : ''}">${eT("My money")}</button></div>
       <div class="slides" id="slides"><div class="slide">${hero}</div><div class="slide">${mySlide(pb)}</div></div>${dueBanner()}${backup}<div class="sec-h">${eT("Shared books")}</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>${books.length ? T("New book") : T("New shared book")}</b>${books.length ? '' : '<small class="muted">' + eT('Split costs with friends, a trip, your flat…') + '</small>'}</span></button></div></main>
-    <button class="fab" data-act="quick-add" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button>`;
+    <div class="fabs"><button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button><button class="fab" data-act="quick-add" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button></div>`;
 }
 
 function personalView(b) {
@@ -626,7 +626,7 @@ function personalView(b) {
   return `<header class="top"><button class="iconbtn" data-act="back" aria-label="${eT("Back")}">‹</button><div class="grow"><h1>👛 ${eT("My money")}</h1></div>${statusPill()}
     <button class="iconbtn" data-act="settings" aria-label="${eT("Settings")}">⚙️</button></header>
     <main>${hero}<div class="tabs" role="tablist">${tabs}</div>${body}</main>
-    <button class="fab" data-act="new-entry" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button>`;
+    <div class="fabs"><button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button><button class="fab" data-act="new-entry" aria-label="${eT("Add")}"><i>＋</i><span>${eT("Add")}</span></button></div>`;
 }
 
 function bookView() {
@@ -671,13 +671,14 @@ function bookView() {
   return `<header class="top"><button class="iconbtn" data-act="back" aria-label="${eT("Back")}">‹</button><div class="grow"><h1>${esc(b.emoji || '📒')} ${esc(b.name)}</h1></div>${statusPill()}
     <button class="iconbtn" data-act="settings" aria-label="${eT("Settings")}">⚙️</button></header>
     <main>${hero}<div class="tabs" role="tablist">${tabs}</div>${body}</main>
-    ${tab === 'entries' || tab === 'balances' ? `<button class="fab" data-act="new-entry" aria-label="${eT("Add expense")}"><i>＋</i><span>${eT("Add expense")}</span></button>` : ''}`;
+    ${tab === 'entries' || tab === 'balances' ? `<div class="fabs"><button class="micfab" data-act="voice" aria-label="${eT('Add by voice')}">🎤</button><button class="fab" data-act="new-entry" aria-label="${eT("Add expense")}"><i>＋</i><span>${eT("Add expense")}</span></button></div>` : ''}`;
 }
 
 /* ───────────────────────── UI: sheets ───────────────────────── */
 let sheetCleanup = null;
+const hideToast = () => { const t = $('#toast'); if (t) t.classList.remove('show'); };
 function openSheet(html) {
-  closeSheet();
+  closeSheet(); hideToast();   // a lingering toast (e.g. Undo) must never cover the new sheet's buttons
   const o = document.createElement('div'); o.className = 'overlay';
   o.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
   o.addEventListener('pointerdown', e => { if (e.target === o) closeSheet(); });
@@ -1035,6 +1036,106 @@ function clearSampleData() {
   touched();
 }
 
+
+/* ───────────────────────── voice entry ─────────────────────────
+   Browser speech recognition (Chrome, Edge, Safari) → voice.js parses the sentence → preview → Save or Edit.
+   A typed line goes through the same parser, so it works in every browser and offline. */
+const speechCtor = () => window.SpeechRecognition || window.webkitSpeechRecognition;
+const voiceCtx = () => ({ today: isoDay(Date.now()), people: live('people'), books: live('books'), meId: me() && me().id, personalId: PERSONAL_ID, currentBookId: S.ui.view === 'book' ? S.ui.bookId : null });
+const VOICE_EXAMPLES = ['Lunch 250 yesterday', 'Got salary 50000', 'Taxi 180 today', 'Netflix 649 every month'];
+function voiceBook(P) { return S.doc.books[P.bookId] && !S.doc.books[P.bookId].deleted ? S.doc.books[P.bookId] : personalBook(); }
+function voiceDesc(P) { return P.desc || catName(P.cat) || T(P.type === 'income' ? 'Income' : 'Expense'); }
+function voiceSave(P) {
+  const b = voiceBook(P); if (!b || !(P.amount > 0)) return null;
+  const me0 = me().id, total = Math.round(P.amount * factor(b.currency)); if (total <= 0) return null;
+  let paidBy = me0, split = {}, method = 'equal';
+  if (P.type === 'income') split = {};
+  else if (b.personal) split = { [me0]: total };
+  else if (P.loan) { paidBy = P.paidBy; split = { [P.sel[0]]: total }; method = 'exact'; }
+  else { paidBy = P.paidBy || me0; const w = {}; (P.sel && P.sel.length ? P.sel : [me0]).forEach(i => { w[i] = 1; }); split = byWeights(total, w); }
+  const e = { id: uid(), bookId: b.id, type: P.type, desc: voiceDesc(P), amount: total, paidBy, split, method, date: P.date, cat: P.cat, note: '', createdAt: now() };
+  if (P.repeat) e.repeat = P.repeat;
+  if (P.loan) e.loan = { rate: 0, due: '' };
+  put('entries', e); materializeRecurring(); buzz();
+  try { localStorage.setItem('sb.last', b.id); } catch {}
+  return e;
+}
+function voiceSheet() {
+  const SRc = speechCtor();
+  let vlang = LANG, listening = false, rec = null, P = null, txt = '', msg = '', saved = false;
+  const o = openSheet('<div id="vform"></div>'), root = $('#vform', o);
+  sheetCleanup = () => { try { rec && rec.abort(); } catch {} };
+  const ERR = { 'not-allowed': 'Microphone access is blocked. Allow it in your browser settings, or type instead.', 'service-not-allowed': 'Microphone access is blocked. Allow it in your browser settings, or type instead.',
+    'no-speech': "I didn't hear anything. Tap the mic and try again.", 'audio-capture': 'No microphone found.', 'network': 'Voice recognition needs an internet connection. You can type instead.',
+    'language-not-supported': "This language isn't available for voice on your device. You can type instead." };
+  const parseText = (t, alts) => {
+    const c = voiceCtx(), tries = [t, ...(alts || [])].filter(Boolean);
+    let best = null; for (const x of tries) { const r = SBVoice.parse(x, c); if (!best) best = r; if (r.amount !== null) { best = r; break; } }
+    return best;
+  };
+  function prevHtml() {
+    const b = voiceBook(P), cur = b.currency, isI = P.type === 'income', who = id => pname(id);
+    const lines = [];
+    lines.push(`<span>${esc(b.personal ? T('My money') : b.name)}</span>`);
+    if (P.loan === 'lent') lines.push(`<span>${eT('Lent {amt} to {who}', { amt: fmt(Math.round(P.amount * factor(cur)), cur), who: who(P.sel[0]) })}</span>`);
+    else if (P.loan === 'borrowed') lines.push(`<span>${eT('Borrowed {amt} from {who}', { amt: fmt(Math.round(P.amount * factor(cur)), cur), who: who(P.paidBy) })}</span>`);
+    else if (!b.personal && P.type !== 'income') { if (P.paidBy && P.paidBy !== me().id) lines.push(`<span>${eT('Paid by {who}', { who: who(P.paidBy) })}</span>`); lines.push(`<span>${eT('Split between {names}', { names: (P.sel || []).map(who).join(', ') })}</span>`); }
+    if (P.repeat) lines.push(`<span>🔁 ${eT('Repeats every {period}', { period: T(PERIOD[P.repeat]) })}</span>`);
+    const warn = P.warnings.map(w => w === 'no-amount' ? T('I couldn’t find an amount — say or type one, e.g. “250”.') : w === 'no-shared-book' ? T('No shared book has {names} — saved to My money instead.', { names: P.names.join(', ') || '…' }) : w === 'loan-needs-one-person' ? T('Mention exactly one person for a loan.') : '').filter(Boolean);
+    return `<div class="vprev card"><div class="vp-h"><span class="chip-b ${P.loan ? 'warn' : isI ? 'pos' : 'zero'}">${eT(P.loan ? 'Loan' : isI ? 'Income' : 'Expense')}</span><span class="muted">${esc(dayLabel(P.date))}</span></div>
+      <div class="vp-amt ${isI ? 'pos' : ''}" id="vamt">${P.amount > 0 ? esc((isI ? '+' : '') + fmt(Math.round(P.amount * factor(cur)), cur)) : '—'}</div>
+      <div class="vp-desc"><span class="tx-ico sm">${esc(P.cat)}</span><b>${esc(voiceDesc(P))}</b></div><div class="vp-meta">${lines.join('')}</div>
+      ${warn.map(w => `<p class="hint bad">${esc(w)}</p>`).join('')}
+      <div class="btns two"><button class="btn" data-x="vedit">${eT('Edit details')}</button>${P.amount > 0 && !P.warnings.includes('loan-needs-one-person') ? `<button class="cta" data-x="vsave">${eT('Save')}</button>` : `<button class="btn" data-x="mic">${eT('Try again')}</button>`}</div></div>`;
+  }
+  function draw() {
+    root.innerHTML = `<div class="sh-head"><h2>🎤 ${eT('Add by voice')}</h2><button class="iconbtn" data-x="close" aria-label="${eT('Close')}">✕</button></div>
+      <div class="lbl">${eT('Speaking')}</div><div class="pcs scroll">${LANGS.map(([c, nat]) => `<button class="pc ${c === vlang ? 'on' : ''}" data-x="vl" data-v="${c}"><span class="pn">${esc(nat)}</span></button>`).join('')}</div>
+      <div class="mic-wrap"><button class="mic ${listening ? 'on' : ''}" data-x="mic" aria-label="${eT(listening ? 'Tap to stop' : 'Add by voice')}" ${SRc ? '' : 'disabled'}>🎤</button></div>
+      <p class="vstate ${msg && !listening ? 'bad' : ''}" id="vstate">${esc(!SRc ? T("Voice input isn't supported in this browser — you can still type it below.") : listening ? T('Listening… speak now') : msg || T('Tap the mic and speak'))}</p>
+      <div class="vtrans" id="vtrans">${txt ? '“' + esc(txt) + '”' : ''}</div>
+      ${P ? prevHtml() : `<div class="lbl">${eT('Try saying')}</div><div class="pcs">${VOICE_EXAMPLES.map(x => `<button class="pc ex" data-x="vex" data-v="${esc(x)}"><span class="pn">${esc(T(x))}</span></button>`).join('')}</div>`}
+      <div class="addrow"><input id="vtext" placeholder="${eT('Or type it…')}" autocomplete="off" value=""><button class="btn" data-x="vgo" aria-label="${eT('Go')}">→</button></div>`;
+  }
+  const finish = (t, alts) => { txt = t; P = parseText(t, alts); msg = ''; listening = false; draw(); };
+  function startMic() {
+    if (!SRc) return;
+    if (listening) { try { rec.stop(); } catch {} return; }
+    P = null; txt = ''; msg = ''; listening = true; draw();
+    let gotFinal = false, errored = false;
+    try { rec = new SRc(); } catch { listening = false; msg = T(ERR['audio-capture']); draw(); return; }
+    rec.lang = (LANGS.find(l => l[0] === vlang) || LANGS[0])[3]; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 3;
+    rec.onresult = e => {
+      let interim = '', fin = '', alts = [];
+      for (let i = e.resultIndex || 0; i < e.results.length; i++) { const r = e.results[i]; if (r.isFinal) { fin += r[0].transcript; for (let k = 0; k < r.length; k++) alts.push(r[k].transcript); } else interim += r[0].transcript; }
+      if (fin) { gotFinal = true; finish(fin.trim(), alts); } else { const el = $('#vtrans', root); if (el) el.textContent = '“' + interim + '”'; }
+    };
+    rec.onerror = e => { errored = true; if (e.error === 'aborted') return; listening = false; msg = T(ERR[e.error] || "Didn’t catch that — try again or type it."); draw(); };
+    rec.onend = () => { if (listening && !gotFinal && !errored) { listening = false; msg = T(ERR['no-speech']); draw(); } };
+    try { rec.start(); } catch { listening = false; msg = T(ERR['audio-capture']); draw(); }
+  }
+  root.addEventListener('click', e => {
+    const t = e.target.closest('[data-x]'); if (!t) return; const x = t.dataset.x;
+    if (x === 'close') closeSheet();
+    else if (x === 'mic') startMic();
+    else if (x === 'vl') { vlang = t.dataset.v; draw(); }
+    else if (x === 'vex') { finish(T(t.dataset.v)); }
+    else if (x === 'vgo') { const v = $('#vtext', root).value.trim(); if (v) finish(v); }
+    else if (x === 'vedit' && P) {
+      const b = voiceBook(P), preset = { type: P.type, amount: P.amount > 0 ? String(P.amount) : '', desc: P.desc, cat: P.cat, date: P.date, repeat: P.repeat || '' };
+      if (!b.personal && P.type !== 'income') { preset.paidBy = P.paidBy; if (P.sel && P.sel.length) preset.sel = [...P.sel]; }
+      closeSheet(); entrySheet(null, preset, b.id);
+    } else if (x === 'vsave' && P) {
+      const en = voiceSave(P); if (!en) return;
+      saved = true; closeSheet();
+      toast(T('Added {desc} · {amt}', { desc: en.desc, amt: fmt(en.amount, S.doc.books[en.bookId].currency) }), () => { del('entries', en.id); toast(T('Entry deleted')); });
+    }
+  });
+  root.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'vtext') { e.preventDefault(); const v = e.target.value.trim(); if (v) finish(v); } });
+  draw();
+  if (!SRc) setTimeout(() => { const i = $('#vtext', root); i && i.focus(); }, 60);
+}
+
 /* ---- share balances ---- */
 const buzz = () => { try { navigator.vibrate && navigator.vibrate(12); } catch {} };
 async function shareSummary() {
@@ -1293,6 +1394,7 @@ document.addEventListener('click', e => {
     S.ui.slide = i; try { localStorage.setItem('sb.slide', JSON.stringify(i)); } catch {}
     el.scrollTo({ left: i * slideStep(el), behavior: 'smooth' });
   }
+  else if (a === 'voice') voiceSheet();
   else if (a === 'open-insights') go('insights');
   else if (a === 'open-personal') { S.ui.tab = 'entries'; S.ui.limit = 40; go('book/' + PERSONAL_ID); }
 

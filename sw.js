@@ -1,5 +1,5 @@
 const CACHE = 'splitbook-v1';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'i18n.js', 'config.js', 'manifest.webmanifest',
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'i18n.js', 'voice.js', 'config.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
