@@ -9,7 +9,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
 (async () => {
   console.log('Source');
   const src = fs.readFileSync(__dirname + '/../app.js', 'utf8');
-  ok(!/\b(confirm|alert|prompt)\s*\(/.test(src), 'app.js never calls native confirm/alert/prompt');
+  ok(!/(?<![.\w])(confirm|alert|prompt)\s*\(/.test(src), 'app.js never calls window.confirm/alert/prompt (the PWA install API `event.prompt()` is the browser install UI, not a dialog)');
   ok(!/<select/.test(src), 'no native <select> dropdowns remain');
 
   const srv = await start(), URL = 'http://localhost:' + srv.address().port + '/index.html';
@@ -73,7 +73,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   await p.click('#toast button'); ok(!!(await p.evaluate(() => live('books').find(x => x.name === 'Japan trip'))), 'Undo restores it');
 
   console.log('Repeat is a chip row, not a dropdown');
-  await p.click('.mm [data-act=add-expense]'); await p.fill('#ea', '99'); await p.fill('#ed', 'Streaming');
+  await p.click('.fab'); await p.fill('#ea', '99'); await p.fill('#ed', 'Streaming');
   eq(await p.$$eval('[data-x=rep]', r => r.map(x => x.textContent.trim())), ['Never', 'Weekly', 'Monthly', 'Yearly'], 'four options');
   await p.click('[data-x=rep][data-v=weekly]'); await p.click('[data-x=save]');
   eq(await p.evaluate(() => live('entries').find(e => e.desc === 'Streaming' && e.repeat).repeat), 'weekly', 'choice is saved');

@@ -25,7 +25,7 @@ const emptyDoc = () => ({ v: 1, people: {}, books: {}, entries: {} });
 const S = {
   doc: jget('sb.doc', null) || emptyDoc(),
   meta: Object.assign({ fileId: null, lastSync: 0, dirty: false, user: null, clientId: '', token: null, tokenExp: 0, wasSignedIn: false }, jget('sb.meta', {})),
-  ui: { view: 'home', bookId: null, tab: 'entries', limit: 40 },
+  ui: { view: 'home', bookId: null, tab: 'entries', limit: 40, slide: jget('sb.slide', null) },
   sync: { state: 'idle', error: '' }, // idle | busy | err
 };
 const persist = () => { jset('sb.doc', S.doc); jset('sb.meta', S.meta); };
@@ -198,7 +198,7 @@ async function sync(interactive) {
     if (!remote || m.remoteStale || S.meta.dirty) id = await driveWrite(id, S.doc);
     S.meta.fileId = id; S.meta.dirty = false; S.meta.lastSync = now();
     S.sync = { state: 'idle', error: '' };
-    persist(); render(); materializeRecurring();
+    persist(); render(); materializeRecurring(); syncReceipts();
   } catch (e) {
     S.sync = { state: 'err', error: e.message }; console.warn('sync', e); paintStatus();
   } finally { syncing = false; }
@@ -327,6 +327,84 @@ const dayLabel = d => {
 };
 
 
+
+/* ───────────────────────── receipts (photos / PDFs) ─────────────────────────
+   Files live in IndexedDB on the device (works offline) and are uploaded to the same hidden Drive folder as the data, one file per receipt.
+   Entries only carry small metadata, so the main data file stays tiny. */
+const rq = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const rcDB = {
+  _p: null,
+  open() { return this._p || (this._p = new Promise((res, rej) => { try { const r = indexedDB.open('splitbook', 1); r.onupgradeneeded = () => { r.result.createObjectStore('receipts', { keyPath: 'id' }).createIndex('up', 'up'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } })); },
+  async st(mode) { return (await this.open()).transaction('receipts', mode).objectStore('receipts'); },
+  async get(id) { return rq((await this.st('readonly')).get(id)); },
+  async put(rec) { return rq((await this.st('readwrite')).put(rec)); },
+  async del(id) { return rq((await this.st('readwrite')).delete(id)); },
+  async pending() { return rq((await this.st('readonly')).index('up').getAll(0)); },
+};
+const RC_MAX = 6, RC_PDF_MAX = 4e6, rcURL = new Map();
+async function prepareReceipt(file) {
+  const type = file.type || '';
+  if (type === 'application/pdf') { if (file.size > RC_PDF_MAX) throw new Error('That PDF is over 4 MB'); return { blob: file, name: file.name, type }; }
+  if (!type.startsWith('image/')) throw new Error('Only photos and PDFs can be attached');
+  try {                                   // shrink phone photos: max 1600px, JPEG — typically 100–250 KB instead of 5 MB
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
+    const sc = Math.min(1, 1600 / Math.max(bmp.width, bmp.height)), w = Math.max(1, Math.round(bmp.width * sc)), h = Math.max(1, Math.round(bmp.height * sc));
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', .72)); if (!blob) throw 0;
+    return { blob, name: (file.name || 'receipt').replace(/\.[^.]+$/, '') + '.jpg', type: 'image/jpeg' };
+  } catch { if (file.size > RC_PDF_MAX) throw new Error('Could not read that image'); return { blob: file, name: file.name, type }; }
+}
+async function addReceiptFile(file) {
+  const p = await prepareReceipt(file), id = uid(), name = p.name || 'Receipt';
+  await rcDB.put({ id, blob: p.blob, name, type: p.type, size: p.blob.size, up: 0, ts: now() });
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}   // ask the browser not to evict them
+  return { id, name, type: p.type, size: p.blob.size };
+}
+async function driveUploadFile(name, blob) {
+  const b = 'rb' + uid(), enc = new TextEncoder();
+  const head = enc.encode(`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: ['appDataFolder'] })}\r\n--${b}\r\nContent-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`);
+  const r = await gfetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + b }, body: new Blob([head, blob, enc.encode(`\r\n--${b}--`)]) });
+  return (await r.json()).id;
+}
+async function driveFindByName(name) {
+  const r = await gfetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(`name='${name}' and trashed=false`)}&fields=files(id)`);
+  return ((await r.json()).files || [])[0] || null;
+}
+let rcSyncing = false;
+async function syncReceipts() {
+  if (rcSyncing || !S.meta.wasSignedIn || !navigator.onLine) return;
+  rcSyncing = true;
+  try { for (const rec of await rcDB.pending()) { if (!(await driveFindByName('receipt-' + rec.id))) await driveUploadFile('receipt-' + rec.id, rec.blob); rec.up = 1; await rcDB.put(rec); } }
+  catch (e) { console.warn('receipts sync', e); } finally { rcSyncing = false; }
+}
+async function receiptBlob(meta) {
+  try { const rec = await rcDB.get(meta.id); if (rec) return rec.blob; } catch {}
+  if (!S.meta.wasSignedIn || !navigator.onLine) return null;
+  try {                                    // added on another device → fetch it from Drive once, then keep it
+    const f = await driveFindByName('receipt-' + meta.id); if (!f) return null;
+    const blob = new Blob([await (await gfetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`)).arrayBuffer()], { type: meta.type });
+    await rcDB.put({ id: meta.id, blob, name: meta.name, type: meta.type, size: blob.size, up: 1, ts: now() }); return blob;
+  } catch { return null; }
+}
+async function hydrateReceipts(root = document) {
+  for (const el of root.querySelectorAll('[data-rid]')) {
+    if (el.dataset.done) continue; el.dataset.done = '1';
+    const id = el.dataset.rid, type = el.dataset.rtype || '', blob = await receiptBlob({ id, type, name: 'receipt' });
+    if (!el.isConnected) continue;
+    if (!blob) { el.classList.add('missing'); el.title = 'Not downloaded yet — connect to the internet'; continue; }
+    if (type.startsWith('image/')) { let u = rcURL.get(id); if (!u) rcURL.set(id, u = URL.createObjectURL(blob)); el.style.backgroundImage = `url(${u})`; el.classList.add('img'); }
+  }
+}
+async function viewReceipt(meta) {
+  const blob = await receiptBlob(meta), pdf = meta.type === 'application/pdf';
+  const L = openLayer(`<div class="rview" role="dialog" aria-modal="true" aria-label="Receipt"><div class="rv-top"><b>${esc(meta.name)}</b><button class="iconbtn" data-x="x" aria-label="Close">✕</button></div><div class="rv-body"></div></div>`, 'center rv');
+  const body = $('.rv-body', L.el);
+  if (!blob) body.innerHTML = `<div class="empty small"><b>Not downloaded yet</b><p>Connect to the internet and open it again.</p></div>`;
+  else { let u = rcURL.get(meta.id); if (!u) rcURL.set(meta.id, u = URL.createObjectURL(blob)); body.innerHTML = pdf ? `<a class="btn primary" href="${u}" target="_blank" rel="noopener">📄 Open PDF</a>` : `<img src="${u}" alt="Receipt">`; }
+  L.el.addEventListener('click', e => { if (e.target.closest('[data-x]') || e.target === L.el) L.close(null); });
+}
+const rcMark = e => e.receipts && e.receipts.length ? ' · 📎' + e.receipts.length : '';
+
 /* ───────────────────────── in-app dialogs (no native confirm/alert/prompt/select) ───────────────────────── */
 function openLayer(html, cls = '') {
   let res; const done = new Promise(r => { res = r; });
@@ -393,7 +471,8 @@ function toast(msg, undo) {
 }
 function route() {
   const m = location.hash.slice(1).match(/^book\/(.+)$/);
-  if (m && S.doc.books[m[1]] && !S.doc.books[m[1]].deleted) { S.ui.view = 'book'; S.ui.bookId = m[1]; }
+  if (location.hash === '#insights') { S.ui.view = 'insights'; S.ui.bookId = null; }
+  else if (m && S.doc.books[m[1]] && !S.doc.books[m[1]].deleted) { S.ui.view = 'book'; S.ui.bookId = m[1]; }
   else { S.ui.view = 'home'; S.ui.bookId = null; }
   window.scrollTo(0, 0); render();
 }
@@ -408,9 +487,9 @@ function render() {
     const bk = S.doc.books[S.ui.bookId];
     if (!bk || bk.deleted) { S.ui.view = 'home'; S.ui.bookId = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); }
   }
-  try { const pb = S.ui.view === 'book' && S.doc.books[S.ui.bookId]; app.innerHTML = pb ? (pb.personal ? personalView(pb) : bookView()) : homeView(); }
+  try { const pb = S.ui.view === 'book' && S.doc.books[S.ui.bookId]; app.innerHTML = S.ui.view === 'insights' ? insightsView() : pb ? (pb.personal ? personalView(pb) : bookView()) : homeView(); }
   catch (e) { console.error('render', e); app.innerHTML = `<div class="empty"><div class="ico">⚠️</div><b>Something went wrong</b><p>Your data is safe on this device.</p><button class="btn sm" onclick="location.hash='';location.reload()">Reload</button></div>`; }
-  paintStatus();
+  paintStatus(); wireSlides();
 }
 const money = (v, cur, signed) => (signed && v > 0 ? '+' : '') + fmt(v, cur).replace(/^-/, '−');
 
@@ -446,13 +525,13 @@ function dueBanner() {
   return `<button class="banner due" data-act="open-loans" data-id="${b.id}"><span>⏰</span><span><b>${r.lender === m.id ? esc(pname(r.borrower)) + '’s loan' : 'Your loan'} ${when}</b><small>${fmt(r.out + r.intDebt, b.currency)} · ${esc(b.name)}</small></span><i>›</i></button>`;
 }
 
-function myMoneyCard(pb) {
+function mySlide(pb) {
   if (!pb) return '';
   const cur = pb.currency, ym = isoDay(Date.now()).slice(0, 7), st = monthStats(pb.id, ym);
-  return `<section class="card mm"><button class="mm-top" data-act="open-personal"><span class="mm-t">👛 My money <small>${new Date().toLocaleDateString(undefined, { month: 'long' })}</small></span><i>›</i></button>
-    <div class="mm-n ${st.net < 0 ? 'neg' : ''}">${money(st.net, cur, true)}</div><div class="mm-s">left this month</div>
-    <div class="mm-row"><div><span class="dot pos"></span>Income<b>${fmt(st.inc, cur)}</b></div><div><span class="dot neg"></span>Spent<b>${fmt(st.exp, cur)}</b></div></div>
-    <div class="btns two"><button class="btn" data-act="add-income">＋ Income</button><button class="btn" data-act="add-expense">− Expense</button></div></section>`;
+  return `<section class="hero alt"><div class="hero-l">My money · ${new Date().toLocaleDateString(undefined, { month: 'long' })}</div>
+    <div class="hero-n ${st.net < 0 ? 'neg' : ''}">${money(st.net, cur, true)}</div><div class="hero-s">left this month</div>
+    <div class="hero-row"><div><span class="dot pos"></span>Income<b>${fmt(st.inc, cur)}</b></div><div><span class="dot neg"></span>Spent<b>${fmt(st.exp, cur)}</b></div></div>
+    <div class="hero-links"><button data-act="open-personal">Activity ›</button><button data-act="open-insights">Net worth &amp; insights ›</button></div></section>`;
 }
 function homeView() {
   const m = me(), books = live('books').filter(b => !b.personal).sort((a, b) => b.updatedAt - a.updatedAt), tot = {}, pb = personalBook();
@@ -463,6 +542,7 @@ function homeView() {
     return `<button class="bk" data-act="open-book" data-id="${b.id}"><span class="bk-ico">${esc(b.emoji || '📒')}</span>
       <span class="bk-mid"><b>${esc(b.name)}</b>${avStack(b.memberIds)}</span>${chip}</button>`;
   }).join('');
+  const si = S.ui.slide == null ? ((!books.length && pb && bookEntries(PERSONAL_ID).length) ? 1 : 0) : S.ui.slide;
   const cnt = {}; books.forEach(b => cnt[b.currency] = (cnt[b.currency] || 0) + 1);
   const cur = Object.keys(tot).sort((x, y) => cnt[y] - cnt[x]);   // most-used currency leads
   const hero = cur.length ? (() => {
@@ -471,15 +551,18 @@ function homeView() {
       <div class="hero-n ${n0 < 0 ? 'neg' : ''}">${money(n0, c0, true)}</div>
       <div class="hero-s">${n0 === 0 ? 'You are all settled up' : n0 > 0 ? 'in your favour across all books' : 'you owe across all books'}${cur.slice(1).map(c => ` · ${money(netOf(c), c, true)}`).join('')}</div>
       <div class="hero-row"><div><span class="dot pos"></span>Owed to you${cur.filter(c => tot[c].owed).map(c => `<b>${fmt(tot[c].owed, c)}</b>`).join('') || '<b>—</b>'}</div>
-      <div><span class="dot neg"></span>You owe${cur.filter(c => tot[c].owe).map(c => `<b>${fmt(tot[c].owe, c)}</b>`).join('') || '<b>—</b>'}</div></div></section>`;
-  })() : (pb && bookEntries(PERSONAL_ID).length) ? '' : `<section class="hero welcome"><div class="hero-l">Welcome to SplitBook</div><div class="hero-t">Your money,<br>on your own terms.</div>
+      <div><span class="dot neg"></span>You owe${cur.filter(c => tot[c].owe).map(c => `<b>${fmt(tot[c].owe, c)}</b>`).join('') || '<b>—</b>'}</div></div>
+      <div class="hero-links"><button data-act="open-insights">Net worth &amp; insights ›</button></div></section>`;
+  })() : (pb && bookEntries(PERSONAL_ID).length) ? `<section class="hero soft"><div class="hero-l">Shared balances</div><div class="hero-t">Split costs with friends</div>
+      <p class="hero-p">Make a book for a trip, your flat or a group — add expenses and see who owes who.</p><div class="hero-links"><button data-act="new-book">＋ New shared book</button><button data-act="open-insights">Net worth &amp; insights ›</button></div></section>` : `<section class="hero welcome"><div class="hero-l">Welcome to SplitBook</div><div class="hero-t">Your money,<br>on your own terms.</div>
       <ol class="steps"><li><i>1</i>Add income &amp; expenses to <b>My money</b></li><li><i>2</i>Make a book to split costs with others</li><li><i>3</i>See who owes who and settle up</li></ol>
       ${(!m || m.name === 'Me') ? `<input id="wn" class="wn" placeholder="Your name (optional)" maxlength="40" autocomplete="given-name">` : ''}</section>`;
   const backup = (S.meta.wasSignedIn || !clientId()) ? '' : `<button class="banner" data-act="settings"><span>☁️</span><span><b>Back up to Google Drive</b><small>Sync across devices. Works offline.</small></span><i>›</i></button>`;
   const name = (m && m.name !== 'Me' && m.name) || '';
   return `<header class="top"><div>${name ? `<small>Hi,</small><h1>${esc(name)} 👋</h1>` : `<h1>Welcome 👋</h1>`}</div>${statusPill()}
-      <button class="iconbtn" data-act="settings" aria-label="Settings">${m ? avatar(m.id) : '⚙️'}</button></header>
-    <main>${hero}${myMoneyCard(pb)}${dueBanner()}${backup}<div class="sec-h">Shared books</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>${books.length ? 'New book' : 'New shared book'}</b>${books.length ? '' : '<small class="muted">Split costs with friends, a trip, your flat…</small>'}</span></button></div></main>
+      <button class="iconbtn" data-act="open-insights" aria-label="Net worth and insights">📊</button><button class="iconbtn" data-act="settings" aria-label="Settings">${m ? avatar(m.id) : '⚙️'}</button></header>
+    <main><div class="sl-tabs" role="tablist"><button data-act="slide" data-i="0" class="${si === 0 ? 'on' : ''}">Overall</button><button data-act="slide" data-i="1" class="${si === 1 ? 'on' : ''}">My money</button></div>
+      <div class="slides" id="slides"><div class="slide">${hero}</div><div class="slide">${mySlide(pb)}</div></div>${dueBanner()}${backup}<div class="sec-h">Shared books</div><div class="list">${cards}<button class="bk new" data-act="new-book"><span class="bk-ico">＋</span><span class="bk-mid"><b>${books.length ? 'New book' : 'New shared book'}</b>${books.length ? '' : '<small class="muted">Split costs with friends, a trip, your flat…</small>'}</span></button></div></main>
     <button class="fab" data-act="quick-add" aria-label="Add"><i>＋</i><span>Add</span></button>`;
 }
 
@@ -498,10 +581,10 @@ function personalView(b) {
       const day = dayLabel(e.date), head = day !== last ? `<div class="day">${day}</div>` : ''; last = day;
       const inc = e.type === 'income';
       return head + `<button class="tx" data-act="edit-entry" data-id="${e.id}"><span class="tx-ico ${inc ? 'pay' : ''}">${esc(e.cat || (inc ? '💼' : '🧾'))}</span>
-        <span class="tx-mid"><b>${esc(e.desc || (inc ? 'Income' : 'Expense'))}</b><small>${esc(catName(e.cat) || (inc ? 'Income' : 'Expense'))}${e.fromRule || e.repeat ? ' · 🔁' : ''}</small></span>
+        <span class="tx-mid"><b>${esc(e.desc || (inc ? 'Income' : 'Expense'))}</b><small>${esc(catName(e.cat) || (inc ? 'Income' : 'Expense'))}${e.fromRule || e.repeat ? ' · 🔁' : ''}${rcMark(e)}</small></span>
         <span class="tx-end"><b class="${inc ? 'pos' : 'neg'}">${inc ? '+' : '−'}${fmt(e.amount, cur)}</b></span></button>`;
     }).join('') + (es.length > S.ui.limit ? `<button class="btn more" data-act="more">Show older · ${es.length - S.ui.limit} more</button>` : '')
-      : `<div class="empty"><div class="ico">👛</div><b>Nothing here yet</b><p>Record your first income or expense.</p><div class="btns two"><button class="btn sm" data-act="add-income">＋ Income</button><button class="btn sm" data-act="add-expense">− Expense</button></div></div>`;
+      : `<div class="empty"><div class="ico">👛</div><b>Nothing here yet</b><p>Tap <b>Add</b> to record your first income or expense.</p></div>`;
     body = recurringBlock(b) + body;
   } else {
     const months = [];
@@ -539,7 +622,7 @@ function bookView() {
       const sub = isS ? `${esc(pname(e.paidBy))} paid ${esc(pname(Object.keys(e.split)[0]))}` : `${esc(pname(e.paidBy))} paid ${fmt(e.amount, cur)}`;
       const right = mn === 0 ? `<small class="muted">not involved</small>` : `<b class="${mn > 0 ? 'pos' : 'neg'}">${mn > 0 ? '+' : '−'}${fmt(Math.abs(mn), cur)}</b><small>${mn > 0 ? 'you lent' : 'you borrowed'}</small>`;
       return head + `<button class="tx" data-act="edit-entry" data-id="${e.id}"><span class="tx-ico ${isS ? 'pay' : ''}">${isS ? '🤝' : esc(e.cat || '🧾')}</span>
-        <span class="tx-mid"><b>${esc(e.desc || (isS ? 'Payment' : 'Expense'))}</b><small>${sub}</small></span><span class="tx-end">${right}</span></button>`;
+        <span class="tx-mid"><b>${esc(e.desc || (isS ? 'Payment' : 'Expense'))}</b><small>${sub}${rcMark(e)}</small></span><span class="tx-end">${right}</span></button>`;
     }).join('') + (es.length > S.ui.limit ? `<button class="btn more" data-act="more">Show older · ${es.length - S.ui.limit} more</button>` : '') : `<div class="empty"><div class="ico">🧾</div><b>Nothing here yet</b><p>Record the first shared expense.</p><button class="btn sm" data-act="new-entry">＋ Add expense</button></div>`;
   } else if (tab === 'balances') {
     const ids = b.memberIds.filter(i => person(i) && !person(i).deleted), debts = simplify(net);
@@ -565,6 +648,7 @@ function bookView() {
 }
 
 /* ───────────────────────── UI: sheets ───────────────────────── */
+let sheetCleanup = null;
 function openSheet(html) {
   closeSheet();
   const o = document.createElement('div'); o.className = 'overlay';
@@ -572,7 +656,7 @@ function openSheet(html) {
   o.addEventListener('pointerdown', e => { if (e.target === o) closeSheet(); });
   document.body.appendChild(o); document.body.classList.add('noscroll'); return o;
 }
-function closeSheet() { const o = $('.overlay'); if (o) { o.remove(); document.body.classList.remove('noscroll'); if (pendingReload) location.reload(); } }
+function closeSheet() { if (sheetCleanup) { const f = sheetCleanup; sheetCleanup = null; f(); } const o = $('.overlay'); if (o) { o.remove(); document.body.classList.remove('noscroll'); if (pendingReload) location.reload(); } }
 document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; const top = [...document.querySelectorAll('.layer')].pop(); if (top) top._close(null); else closeSheet(); });
 
 /* ---- book form ---- */
@@ -633,9 +717,12 @@ function entrySheet(entryId, preset, bookId) {
     : { type: 'expense', desc: '', amount: '', paidBy: defPayer(), date: isoDay(Date.now()), cat: '🧾', note: '', method: 'equal', sel: [...members], vals: {}, custom: false };
   if (ex) for (const [p, c] of Object.entries(ex.split)) E.vals[p] = (ex.method === 'percent' || ex.method === 'shares') ? ((ex.vals && ex.vals[p]) ?? '') : toInput(c, cur);
   if (ex && ex.type === 'expense' && ex.method === 'equal') E.custom = false;
+  E.receipts = ex && ex.receipts ? ex.receipts.map(r => ({ ...r })) : []; E.fresh = [];
+  let saved = false;
   E.repeat = ex ? (ex.repeat || '') : ''; E.rate = ex && ex.loan && ex.loan.rate ? String(ex.loan.rate) : ''; E.due = ex && ex.loan ? (ex.loan.due || '') : '';
   if (preset) Object.assign(E, preset);
   const o = openSheet('<div id="form"></div>'), root = $('#form', o);
+  sheetCleanup = () => { if (!saved) E.fresh.forEach(id => rcDB.del(id).catch(() => {})); };   // after openSheet, which runs the previous form's cleanup
   const amt = () => parseMoney(E.amount, cur);
 
   function compute() {
@@ -683,18 +770,20 @@ function entrySheet(entryId, preset, bookId) {
       ${isS ? `<div class="lbl">Paid to</div><div class="pcs scroll">${members.filter(i => i !== E.paidBy).map(i => pc(i, i === E.sel[0], 'to')).join('')}</div>` :
       `<div class="lbl">${E.cat === '💸' ? 'Lent to' : 'Split between'} <button class="link" data-x="all">${E.sel.length === members.length ? 'Clear' : 'Everyone'}</button></div>
       ${E.custom ? `<div class="seg">${[['equal', 'Equal'], ['exact', 'Exact'], ['percent', '%'], ['shares', 'Shares']].map(([k, l]) => `<button data-x="method" data-v="${k}" class="${E.method === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-        <div class="card pad">${members.map(i => `<div class="who"><label>${avatar(i, 'xs')}<input type="checkbox" data-x="sel" data-v="${i}" ${E.sel.includes(i) ? 'checked' : ''}><span>${esc(pname(i))}</span></label>
-          ${E.method !== 'equal' && E.sel.includes(i) ? `<input class="val" data-val="${i}" inputmode="decimal" value="${esc(E.vals[i] ?? '')}" placeholder="${unit}">` : ''}<span class="calc" data-calc="${i}"></span></div>`).join('')}</div>` :
+        <div class="card pad">${members.map(i => `<div class="who"><input type="checkbox" id="ck-${i}" data-x="sel" data-v="${i}" ${E.sel.includes(i) ? 'checked' : ''}><label for="ck-${i}">${avatar(i, 'xs')}<span>${esc(pname(i))}</span></label><span class="calc" data-calc="${i}"></span>
+          ${E.method !== 'equal' && E.sel.includes(i) ? `<input class="val" data-val="${i}" inputmode="decimal" value="${esc(E.vals[i] ?? '')}" placeholder="${unit}" aria-label="${esc(pname(i))} amount">` : ''}</div>`).join('')}</div>` :
         `<div class="pcs">${members.map(i => pc(i, E.sel.includes(i), 'tog')).join('')}</div>`}
       <div class="split-foot"><span id="hint" class="hint"></span><button class="link" data-x="custom">${E.custom ? 'Simple split' : 'Customize split'}</button></div>`}`}
       <div class="row2"><label class="field"><span>Date</span><input id="edt" type="date" value="${E.date}"></label>
         ${isS ? '' : `<label class="field grow"><span>Note</span><input id="en" value="${esc(E.note)}" placeholder="Optional" maxlength="300"></label>`}</div>
-      ${isS ? '' : `${isLoanForm() ? `<div class="loanbox"><div class="lbl">Loan terms <small>optional</small></div><div class="row2"><label class="field"><span>Interest % / year</span><input id="elr" inputmode="decimal" value="${esc(E.rate)}" placeholder="0"></label>
+      ${isS ? '' : `<div class="lbl">Receipts <small>optional</small></div><div class="rcpts">${E.receipts.map(r => `<div class="rc"><button class="rc-th" data-x="rview" data-v="${r.id}" data-rid="${r.id}" data-rtype="${esc(r.type)}" aria-label="View ${esc(r.name)}">${r.type === 'application/pdf' ? '<span>📄</span><small>PDF</small>' : ''}</button><button class="rc-x" data-x="rdel" data-v="${r.id}" aria-label="Remove receipt">×</button></div>`).join('')}${E.receipts.length < RC_MAX ? `<label class="rc add"><input type="file" id="rcam" accept="image/*" capture="environment" hidden><span>📷</span><small>Camera</small></label><label class="rc add"><input type="file" id="rfile" accept="image/*,application/pdf" multiple hidden><span>＋</span><small>Upload</small></label>` : ''}</div>`}
+      ${isS ? '' : `${isLoanForm() ? `<div class="loanbox"><div class="lbl">Loan terms <small>optional</small></div><div class="row2"><label class="field"><span>Interest % / yr</span><input id="elr" inputmode="decimal" value="${esc(E.rate)}" placeholder="0"></label>
         <label class="field"><span>Due date</span><input id="eld" type="date" value="${E.due}"></label></div></div>` : ''}
         ${ex && ex.fromRule ? `<p class="note">🔁 Part of a recurring series. Edit the original to change future ones.</p>` : `<div class="field"><span>Repeat</span><div class="pcs scroll">${[['', 'Never'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['yearly', 'Yearly']].map(([k, l]) => `<button class="pc ${E.repeat === k ? 'on' : ''}" data-x="rep" data-v="${k}">${l}</button>`).join('')}</div></div>`}`}
       <div class="btns"><button class="cta" id="savebtn" data-x="save"></button>${ex ? `<button class="btn danger" data-x="del" aria-label="Delete">🗑</button>` : ''}</div>`;
-    updateCalc();
+    updateCalc(); if (typeof fitAmount === 'function') fitAmount(); hydrateReceipts(root);
   }
+  const fitAmount = () => { const a = $('#ea', root); if (!a) return; const n = a.value.length; a.style.fontSize = n > 13 ? '28px' : n > 10 ? '34px' : n > 8 ? '42px' : ''; };
   const pull = () => {
     const g = id => root.querySelector(id);
     if (g('#ed')) E.desc = g('#ed').value; if (g('#ea')) E.amount = g('#ea').value; if (g('#edt')) E.date = g('#edt').value || E.date; if (g('#en')) E.note = g('#en').value;
@@ -702,11 +791,19 @@ function entrySheet(entryId, preset, bookId) {
   };
   root.addEventListener('input', e => {
     if (e.target.dataset.val) { E.vals[e.target.dataset.val] = e.target.value; updateCalc(); }
-    else if (e.target.id === 'ea') { E.amount = e.target.value; updateCalc(); }
+    else if (e.target.id === 'ea') { E.amount = e.target.value; fitAmount(); updateCalc(); }
   });
   root.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'ea') { e.preventDefault(); const d = $('#ed', root); d ? d.focus() : $('#savebtn', root).click(); }
     else if (e.key === 'Enter' && e.target.id === 'ed') { e.preventDefault(); $('#savebtn', root).click(); } });
-  root.addEventListener('change', e => {
+  root.addEventListener('change', async e => {
+    if (e.target.id === 'rcam' || e.target.id === 'rfile') {
+      const files = [...e.target.files]; e.target.value = ''; pull();
+      for (const f of files) {
+        if (E.receipts.length >= RC_MAX) { toast(`Up to ${RC_MAX} receipts per entry`); break; }
+        try { const m = await addReceiptFile(f); E.receipts.push(m); E.fresh.push(m.id); } catch (err) { toast(err.message || 'Could not add that file'); }
+      }
+      draw(); return;
+    }
     if (e.target.dataset.x === 'sel') { pull(); const v = e.target.dataset.v, i = E.sel.indexOf(v); i < 0 ? E.sel.push(v) : E.sel.splice(i, 1); draw(); }
   });
   root.addEventListener('click', e => {
@@ -716,6 +813,8 @@ function entrySheet(entryId, preset, bookId) {
     else if (x === 'type') { E.type = v; E.sel = v === 'settle' ? [members.find(i => i !== E.paidBy)].filter(Boolean) : [...members]; if (v === 'income') E.cat = '💼'; else if (INCOME_CATS.some(([k]) => k === E.cat) && E.cat !== '🎁') E.cat = '🧾'; draw(); }
     else if (x === 'book') { setBook(v); E.paidBy = defPayer(); E.sel = [...members]; E.vals = {}; if (b.personal && E.type === 'settle') E.type = 'expense'; if (!b.personal && E.type === 'income') { E.type = 'expense'; E.cat = '🧾'; } draw(); }
     else if (x === 'rep') { E.repeat = v; draw(); }
+    else if (x === 'rview') { const r = E.receipts.find(z => z.id === v); r && viewReceipt(r); }
+    else if (x === 'rdel') { E.receipts = E.receipts.filter(z => z.id !== v); if (E.fresh.includes(v)) { E.fresh = E.fresh.filter(z => z !== v); rcDB.del(v).catch(() => {}); } draw(); }
     else if (x === 'cat') { E.cat = v; if (!E.desc.trim()) E.desc = t.dataset.l === 'Other' ? '' : t.dataset.l; if (v === '💸' && !ex && E.sel.length !== 1) E.sel = [members.find(i => i !== E.paidBy)].filter(Boolean); draw(); $('#ed', root).focus(); }
     else if (x === 'paid') { E.paidBy = v; if (E.type === 'settle' && E.sel[0] === v) E.sel = [members.find(i => i !== v)]; draw(); }
     else if (x === 'to') { E.sel = [v]; draw(); }
@@ -739,9 +838,10 @@ function entrySheet(entryId, preset, bookId) {
         const only = Object.keys(entry.split);
         if (E.cat === '💸' && only.length === 1 && only[0] !== E.paidBy && !(ex && ex.interestFor)) entry.loan = { rate: Math.max(0, parseFloat(String(E.rate).replace(',', '.')) || 0), due: E.due || '' };
       }
+      if (E.receipts.length && !isS) entry.receipts = E.receipts;
       if (ex && ex.fromRule) entry.fromRule = ex.fromRule;
       if (ex && ex.interestFor) entry.interestFor = ex.interestFor;
-      put('entries', entry); materializeRecurring(); buzz(); closeSheet();
+      saved = true; put('entries', entry); materializeRecurring(); buzz(); closeSheet(); syncReceipts();
       try { localStorage.setItem('sb.last', bid); } catch {}
       if (S.ui.view === 'book' && S.ui.bookId !== bid) go('book/' + bid);
       toast(ex ? 'Entry updated' : isS ? 'Payment recorded' : E.type === 'income' ? 'Income added' : 'Expense added');
@@ -763,6 +863,7 @@ function settingsSheet() {
       ${clientId() ? `<button class="cta" data-x="in">Continue with Google</button>` : `<p class="note">Google backup isn't enabled for this app yet. Everything still works and is saved on this device.</p>`}`}</div>
     <div class="lbl">Your name</div>
     <div class="addrow"><input id="myname" value="${esc((m || {}).name || '')}"><button class="btn" data-x="savename">Save</button></div>
+    ${canInstall() ? `<div class="lbl">Install</div><div class="card pad acct"><b>📲 Install SplitBook</b><p class="note">Add it to your home screen — opens full-screen and works offline.</p><button class="cta" data-x="install">Install app</button></div>` : ''}
     ${personalBook() ? `<div class="lbl">My money currency</div><button class="curbtn" data-x="pcur"><b>${esc(symbol(personalBook().currency))} ${personalBook().currency}</b><small>${esc(curName(personalBook().currency))}</small><i>›</i></button><p class="note">Keeps the same numbers — no exchange-rate conversion.</p>` : ''}
     <div class="lbl">Demo</div>
     <div class="card pad"><p class="note">Fill the app with realistic example books — daily spends, a trip, rent &amp; bills, subscriptions, loans and a EUR weekend — to see how everything works.</p>
@@ -772,6 +873,7 @@ function settingsSheet() {
   o.addEventListener('click', async e => {
     const x = e.target.closest('[data-x]')?.dataset.x; if (!x) return;
     if (x === 'close') closeSheet();
+    else if (x === 'install') { closeSheet(); installSheet(true); }
     else if (x === 'pcur') { const c = await pickCurrency(personalBook().currency); if (c && c !== personalBook().currency) { changeCurrency(PERSONAL_ID, c); toast('Currency updated'); settingsSheet(); } }
     else if (x === 'in') { closeSheet(); await signIn(); }
     else if (x === 'out') { closeSheet(); signOut(); }
@@ -912,6 +1014,235 @@ async function shareSummary() {
   try { if (navigator.share) { await navigator.share({ text }); return; } await navigator.clipboard.writeText(text); toast('Summary copied'); } catch { /* cancelled */ }
 }
 
+
+
+/* ───────────────────────── insights: net worth & money check-up ───────────────────────── */
+const addMonths = (ym, n) => { const [y, m] = ym.split('-').map(Number); return ymd(new Date(y, m - 1 + n, 1)).slice(0, 7); };
+const monthShort = ym => new Date(ym + '-01T00:00').toLocaleDateString(undefined, { month: 'short' });
+const daysInMonth = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m, 0).getDate(); };
+const sumBy = (a, f) => a.reduce((s, x) => s + f(x), 0);
+function primaryCurrency() {
+  const pb = personalBook(); if (pb) return pb.currency;
+  const c = {}; live('books').forEach(b => c[b.currency] = (c[b.currency] || 0) + 1);
+  return Object.keys(c).sort((a, b) => c[b] - c[a])[0] || localeCurrency();
+}
+/* One row per entry that is income or a real cost to me (personal expense, or my share of a shared expense; loan principal is not a cost). */
+function costRows(cur) {
+  const m = me(), rows = [];
+  for (const e of live('entries')) {
+    const b = S.doc.books[e.bookId]; if (!b || b.deleted || b.currency !== cur) continue;
+    if (b.personal) { if (e.type === 'income') rows.push({ e, b, date: e.date, cat: e.cat, inc: e.amount, cost: 0 }); else if (e.type === 'expense') rows.push({ e, b, date: e.date, cat: e.cat, inc: 0, cost: e.amount }); }
+    else if (e.type === 'expense' && !isLoan(e)) { const c = (m && e.split[m.id]) || 0; if (c) rows.push({ e, b, date: e.date, cat: e.cat, inc: 0, cost: c, shared: true }); }
+  }
+  return rows;
+}
+function insightsData(asOf = isoDay(Date.now())) {
+  const m = me(), cur = primaryCurrency(), ymNow = asOf.slice(0, 7), pb = personalBook(), rows = costRows(cur).filter(r => r.date <= asOf), f = factor(cur);
+  const keys = Array.from({ length: 12 }, (_, i) => addMonths(ymNow, i - 11)), bucket = {};
+  keys.forEach(k => bucket[k] = { k, inc: 0, exp: 0 });
+  rows.forEach(r => { const b = bucket[r.date.slice(0, 7)]; if (b) { b.inc += r.inc; b.exp += r.cost; } });
+  const months = keys.map(k => ({ ...bucket[k], net: bucket[k].inc - bucket[k].exp, label: monthShort(k) }));
+  const first = rows.length ? rows.map(r => r.date.slice(0, 7)).sort()[0] : ymNow;
+  const last3 = months.filter(x => x.k < ymNow && x.k >= first).slice(-3), inc3 = sumBy(last3, x => x.inc), exp3 = sumBy(last3, x => x.exp);
+  const avgInc = last3.length ? inc3 / last3.length : 0, avgExp = last3.length ? exp3 / last3.length : 0;
+  const savingsRate = inc3 > 0 ? (inc3 - exp3) / inc3 : null;
+  const now = bucket[ymNow], dom = +asOf.slice(8, 10), dim = daysInMonth(ymNow), projected = dom ? Math.round(now.exp / dom * dim) : 0;
+  const catSum = ks => { const o = {}; rows.filter(r => r.cost && ks.includes(r.date.slice(0, 7))).forEach(r => { const k = catName(r.cat) || 'Other'; (o[k] = o[k] || { v: 0, ico: r.cat || '🧾' }).v += r.cost; }); return o; };
+  const cn = catSum([ymNow]), c3 = catSum(last3.map(x => x.k));
+  const cats = [...new Set([...Object.keys(cn), ...Object.keys(c3)])].map(name => ({ name, ico: (cn[name] || c3[name]).ico, now: (cn[name] || { v: 0 }).v, avg: last3.length ? (c3[name] || { v: 0 }).v / last3.length : 0 })).sort((a, b) => b.now - a.now || b.avg - a.avg);
+  // net worth = My money balance + owed to you − you owe (primary currency); other currencies listed apart
+  const cash = pb && pb.currency === cur ? sumBy(bookEntries(pb.id).filter(e => e.date <= asOf), e => e.type === 'income' ? e.amount : e.type === 'expense' ? -e.amount : 0) : 0;
+  let owed = 0, owe = 0; const exposure = [], others = {};
+  for (const b of live('books')) {
+    if (b.personal) continue;
+    const mine = m ? sumBy(bookEntries(b.id).filter(e => e.date <= asOf && e.type !== 'income'), e => (e.paidBy === m.id ? e.amount : 0) - (e.split[m.id] || 0)) : 0;
+    if (b.currency === cur) { if (mine > 0) owed += mine; else owe += -mine; exposure.push({ book: b, mine }); }
+    else { const o = others[b.currency] = others[b.currency] || { owed: 0, owe: 0 }; if (mine > 0) o.owed += mine; else o.owe += -mine; }
+  }
+  const netWorth = cash + owed - owe;
+  const ledger = [];
+  for (const e of live('entries')) {
+    const b = S.doc.books[e.bookId]; if (!b || b.deleted || b.currency !== cur || e.date > asOf) continue;
+    if (b.personal) { if (e.type === 'income') ledger.push([e.date, e.amount]); else if (e.type === 'expense') ledger.push([e.date, -e.amount]); }
+    else if (m && e.type !== 'income') ledger.push([e.date, (e.paidBy === m.id ? e.amount : 0) - (e.split[m.id] || 0)]);
+  }
+  const series = keys.map(k => ({ k, label: monthShort(k), v: sumBy(ledger.filter(x => x[0] <= (k === ymNow ? asOf : k + '-31')), x => x[1]) }));
+  // recurring commitments
+  const rec = live('entries').filter(e => e.repeat && PERIOD[e.repeat]).map(e => {
+    const b = S.doc.books[e.bookId]; if (!b || b.deleted) return null;
+    const mine = e.type === 'income' || b.personal ? e.amount : ((m && e.split[m.id]) || 0); if (!mine) return null;
+    return { e, b, income: e.type === 'income', cur: b.currency, monthly: Math.round(perMonth({ amount: mine, repeat: e.repeat })), mine, next: nextDue(e, asOf) };
+  }).filter(Boolean);
+  const fixedOut = sumBy(rec.filter(x => !x.income && x.cur === cur), x => x.monthly), fixedIn = sumBy(rec.filter(x => x.income && x.cur === cur), x => x.monthly);
+  const fixedRatio = avgInc > 0 ? fixedOut / avgInc : (fixedIn > 0 ? fixedOut / fixedIn : null);
+  // loans I'm part of
+  const loans = []; for (const b of live('books')) { if (b.personal) continue; for (const r of loanReport(b.id, asOf)) if (!r.settled && m && (r.lender === m.id || r.borrower === m.id)) loans.push({ r, b, lent: r.lender === m.id }); }
+  const loanTotal = lent => sumBy(loans.filter(x => x.lent === lent && x.b.currency === cur), x => x.r.out + x.r.intDebt + x.r.pending);
+  const lentOut = loanTotal(true), borrowedOut = loanTotal(false), overdue = loans.filter(x => x.r.overdue);
+  // unusual spends & duplicates (last 60 / 180 days)
+  const ago = n => isoDay(new Date(asOf + 'T00:00').getTime() - n * 864e5);
+  const base = rows.filter(r => r.cost && !r.e.fromRule && !r.e.repeat && r.date >= ago(180) && r.date <= asOf).map(r => r.cost);
+  let outliers = [];
+  if (base.length >= 8) {
+    const mean = sumBy(base, x => x) / base.length, sd = Math.sqrt(sumBy(base, x => (x - mean) ** 2) / base.length), sorted = [...base].sort((a, b) => a - b), med = sorted[Math.floor(sorted.length / 2)];
+    outliers = rows.filter(r => r.cost && !r.e.fromRule && !r.e.repeat && r.date >= ago(60) && r.date <= asOf && r.cost > mean + 2.5 * sd && r.cost >= 2 * med).sort((a, b) => b.cost - a.cost).slice(0, 3).map(r => ({ ...r, times: med ? r.cost / med : 0 }));
+  }
+  const dupMap = {};
+  for (const e of live('entries')) { const b = S.doc.books[e.bookId]; if (!b || b.deleted || b.currency !== cur || e.type !== 'expense' || e.fromRule || e.date < ago(60) || e.date > asOf) continue; (dupMap[b.id + '|' + (e.desc || '').trim().toLowerCase() + '|' + e.amount] = dupMap[b.id + '|' + (e.desc || '').trim().toLowerCase() + '|' + e.amount] || []).push(e); }
+  const dups = Object.values(dupMap).map(g => g.sort((a, b) => a.date.localeCompare(b.date))).filter(g => g.length > 1 && daysBetween(g[0].date, g[g.length - 1].date) <= 1);
+  const incomeDates = rows.filter(r => r.inc).map(r => r.date).sort(), lastIncome = incomeDates[incomeDates.length - 1] || null;
+  const big = 1000 * f, noReceipt = rows.filter(r => r.cost && r.e.amount >= big && !(r.e.receipts && r.e.receipts.length) && r.date >= ago(90) && r.date <= asOf);
+  const top = rows.filter(r => r.cost && r.date >= ago(90) && r.date <= asOf).sort((a, b) => b.cost - a.cost).slice(0, 5);
+  const runway = avgExp > 0 && cash > 0 ? cash / avgExp : (avgExp > 0 ? 0 : null);
+
+  // ---- findings (the "audit") ----
+  const F = [], add = (level, icon, title, detail, act) => F.push({ level, icon, title, detail, act });
+  const pct = x => Math.round(x * 100) + '%', money0 = v => fmt(Math.round(v), cur);
+  if (rows.length) {
+    if (savingsRate === null) add('info', '💡', 'Add your income', 'Record your salary or other income in My money to see your savings rate.');
+    else if (savingsRate >= .2) add('good', '✅', `Saving ${pct(savingsRate)} of income`, `Over the last ${last3.length} month${last3.length > 1 ? 's' : ''} you kept ${money0(inc3 - exp3)} of ${money0(inc3)} earned. That beats the 20% rule of thumb.`);
+    else if (savingsRate >= .05) add('warn', '⚠️', `Saving ${pct(savingsRate)} of income`, `Aim for 20%. You kept ${money0(inc3 - exp3)} of ${money0(inc3)} over the last ${last3.length} month${last3.length > 1 ? 's' : ''}.`);
+    else if (savingsRate >= 0) add('warn', '⚠️', 'Almost nothing left over', `You kept ${pct(savingsRate)} of income over the last ${last3.length} months.`);
+    else add('bad', '🔴', 'Spending more than you earn', `Over the last ${last3.length} months you spent ${money0(exp3 - inc3)} more than you earned (${pct(savingsRate)}).`);
+    if (last3.length && dom >= 5 && avgExp > 0) {
+      const r = projected / avgExp;
+      if (r > 1.2) add('warn', '📈', `On pace to spend ${money0(projected)} this month`, `That's ${pct(r - 1)} above your ${last3.length}-month average of ${money0(avgExp)}.`);
+      else if (r < .9) add('good', '📉', 'Spending is below your usual pace', `On track for ${money0(projected)} vs a usual ${money0(avgExp)}.`);
+    }
+    cats.filter(c => c.avg > 0 && c.now > c.avg * 1.5 && c.now - c.avg >= .05 * avgExp).slice(0, 2).forEach(c => add('warn', c.ico, `${c.name} is up ${pct(c.now / c.avg - 1)}`, `${money0(c.now)} so far this month vs ${money0(c.avg)} a month on average.`));
+    if (fixedRatio !== null && fixedOut > 0) {
+      if (fixedRatio > .5) add('bad', '🔴', `Fixed bills take ${pct(fixedRatio)} of income`, `Rent, subscriptions and other recurring costs total ${money0(fixedOut)} a month.`);
+      else if (fixedRatio > .35) add('warn', '⚠️', `Fixed bills take ${pct(fixedRatio)} of income`, `${money0(fixedOut)} a month is committed before you spend anything else.`);
+      else add('good', '✅', `Fixed bills are ${pct(fixedRatio)} of income`, `${money0(fixedOut)} a month in recurring costs — a healthy share.`);
+    }
+    if (runway !== null) {
+      if (runway < 1) add('bad', '🔴', 'Cash runway under a month', `Your My money balance covers about ${runway.toFixed(1)} months of average spending.`);
+      else if (runway < 3) add('warn', '⚠️', `Cash covers ${runway.toFixed(1)} months of spending`, 'An emergency fund of 3–6 months is a good target.');
+      else add('good', '✅', `Cash covers ${runway.toFixed(1)} months of spending`, runway >= 6 ? 'A solid emergency cushion.' : 'You have a decent buffer.');
+    }
+  }
+  if (overdue.length) add('bad', '⏰', `${overdue.length} overdue loan${overdue.length > 1 ? 's' : ''}`, overdue.map(x => `${x.lent ? pname(x.r.borrower) + ' owes you' : 'You owe ' + pname(x.r.lender)} ${fmt(x.r.out + x.r.intDebt, x.b.currency)} (${-x.r.daysLeft}d late)`).join(' · '), { label: 'Open loans', act: 'open-loans', id: overdue[0].b.id });
+  if (lentOut > 0) add('info', '💸', `${money0(lentOut)} lent out`, 'Money others owe you from loans, including interest not yet added.');
+  if (borrowedOut > 0) add('warn', '💳', `You owe ${money0(borrowedOut)} in loans`, 'Repay on time to avoid interest piling up.');
+  if (owe > 0) add(owe > (avgInc || 1) * .3 ? 'warn' : 'info', '🤝', `You owe ${money0(owe)} in shared books`, 'Settle up to keep friendships (and your net worth) healthy.');
+  outliers.forEach(o => add('warn', '🔍', `Unusual spend: ${o.e.desc || 'expense'}`, `${fmt(o.cost, cur)} on ${shortDate(o.date)} — about ${o.times.toFixed(1)}× your typical spend. Worth a second look?`, { label: 'View', act: 'edit-entry', id: o.e.id }));
+  dups.slice(0, 3).forEach(g => add('warn', '🧾', `Possible duplicate: ${g[0].desc}`, `${fmt(g[0].amount, cur)} recorded ${g.length}× on ${shortDate(g[0].date)}${g[1].date !== g[0].date ? ' / ' + shortDate(g[1].date) : ''}.`, { label: 'Review', act: 'edit-entry', id: g[g.length - 1].id }));
+  if (lastIncome && daysBetween(lastIncome, asOf) > 40 && !rec.some(x => x.income)) add('info', '💼', 'No income recorded lately', `Last income was on ${shortDate(lastIncome)}. Forgot to log one?`);
+  if (noReceipt.length) add('info', '📎', `${noReceipt.length} big spend${noReceipt.length > 1 ? 's' : ''} without a receipt`, `Attach receipts to expenses over ${money0(big)} so you can prove them later.`);
+  // ---- health score ----
+  let score = null;
+  if (rows.length) {
+    score = 100;
+    if (savingsRate !== null) score -= savingsRate < 0 ? 30 : savingsRate < .05 ? 20 : savingsRate < .1 ? 12 : savingsRate < .2 ? 6 : 0;
+    if (fixedRatio !== null) score -= fixedRatio > .5 ? 15 : fixedRatio > .35 ? 8 : 0;
+    score -= Math.min(20, overdue.length * 10);
+    if (runway !== null) score -= runway < 1 ? 15 : runway < 3 ? 8 : 0;
+    if (last3.length && dom >= 5 && avgExp > 0 && projected / avgExp > 1.2) score -= 8;
+    if (owe > 0) score -= 3;
+    score -= Math.min(6, dups.length * 3) + Math.min(6, outliers.length * 3);
+    score = Math.max(0, Math.min(100, Math.round(score)));
+  }
+  const grade = score === null ? '' : score >= 80 ? 'Excellent' : score >= 60 ? 'Good' : score >= 40 ? 'Needs attention' : 'At risk';
+  return { cur, asOf, months, last3, avgInc, avgExp, savingsRate, projected, now, cats, cash, owed, owe, netWorth, series, exposure, others, rec, fixedOut, fixedIn, fixedRatio,
+    loans, lentOut, borrowedOut, overdue, outliers, dups, noReceipt, top, runway, findings: F, score, grade, hasData: rows.length > 0 || exposure.length > 0 };
+}
+
+/* tiny SVG charts */
+function lineChart(vals, labels, cur) {
+  const W = 320, H = 130, P = 8, lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = (hi - lo) || 1;
+  const x = i => P + i * (W - 2 * P) / (vals.length - 1 || 1), y = v => H - 22 - (v - lo) / span * (H - 40);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Net worth over 12 months, now ${esc(fmt(vals[vals.length - 1], cur))}">
+    <line class="ax" x1="${P}" x2="${W - P}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/><polygon class="area" points="${x(0)},${y(0).toFixed(1)} ${pts} ${x(vals.length - 1)},${y(0).toFixed(1)}"/>
+    <polyline class="ln" points="${pts}"/><circle class="dot" cx="${x(vals.length - 1).toFixed(1)}" cy="${y(vals[vals.length - 1]).toFixed(1)}" r="4"/>
+    ${[0, 5, 11].filter(i => i < labels.length).map(i => `<text class="tx" x="${x(i).toFixed(1)}" y="${H - 5}" text-anchor="${i === 0 ? 'start' : i === 11 ? 'end' : 'middle'}">${esc(labels[i])}</text>`).join('')}</svg>`;
+}
+function barChart(months) {
+  const W = 320, H = 130, P = 6, max = Math.max(1, ...months.flatMap(m => [m.inc, m.exp])), gw = (W - 2 * P) / months.length, bw = Math.min(10, gw / 2 - 2), h = v => v / max * (H - 36);
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Income and spending, last 12 months">${months.map((m, i) => { const cx = P + gw * i + gw / 2;
+    return `<rect class="bi" x="${(cx - bw - 1).toFixed(1)}" y="${(H - 22 - h(m.inc)).toFixed(1)}" width="${bw}" height="${Math.max(0, h(m.inc)).toFixed(1)}" rx="2"/><rect class="be" x="${(cx + 1).toFixed(1)}" y="${(H - 22 - h(m.exp)).toFixed(1)}" width="${bw}" height="${Math.max(0, h(m.exp)).toFixed(1)}" rx="2"/>${i % 3 === 0 || i === months.length - 1 ? `<text class="tx" x="${cx.toFixed(1)}" y="${H - 5}" text-anchor="middle">${esc(m.label)}</text>` : ''}`; }).join('')}</svg>`;
+}
+function scoreRing(score) {
+  const r = 38, c = 2 * Math.PI * r, col = score >= 80 ? 'var(--pos)' : score >= 60 ? 'var(--brand)' : score >= 40 ? '#d97706' : 'var(--neg)';
+  return `<svg class="ring" viewBox="0 0 100 100" role="img" aria-label="Money health score ${score} out of 100"><circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--soft)" stroke-width="10"/><circle cx="50" cy="50" r="${r}" fill="none" stroke="${col}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${(c * score / 100).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 50 50)"/><text x="50" y="56" text-anchor="middle" class="rt">${score}</text></svg>`;
+}
+function insightsView() {
+  const D = insightsData(), cur = D.cur, prev = D.series[D.series.length - 2], delta = prev ? D.netWorth - prev.v : 0;
+  const hdr = `<header class="top"><button class="iconbtn" data-act="back" aria-label="Back">‹</button><div class="grow"><h1>Net worth &amp; insights</h1></div>${statusPill()}</header>`;
+  if (!D.hasData) return hdr + `<main><div class="empty"><div class="ico">📊</div><b>Nothing to analyse yet</b><p>Add some income and expenses in My money, or create a shared book — your net worth and money check-up appear here.</p></div></main>`;
+  const otherCur = Object.entries(D.others);
+  const hero = `<section class="hero"><div class="hero-l">Net worth</div><div class="hero-n ${D.netWorth < 0 ? 'neg' : ''}" id="nw">${money(D.netWorth, cur)}</div>
+    <div class="hero-s">${prev ? `${delta >= 0 ? '▲' : '▼'} ${fmt(Math.abs(delta), cur)} vs end of last month` : 'My money + owed to you − you owe'}</div>
+    <div class="hero-row"><div>My money<b>${money(D.cash, cur)}</b></div><div><span class="dot pos"></span>Owed to you<b>${fmt(D.owed, cur)}</b></div><div><span class="dot neg"></span>You owe<b>${fmt(D.owe, cur)}</b></div></div>
+    ${otherCur.length ? `<div class="hero-oth">Other currencies (not added in): ${otherCur.map(([c, o]) => `${money(o.owed - o.owe, c, true)}`).join(' · ')}</div>` : ''}</section>`;
+  const check = D.score === null ? '' : `<div class="sec-h">Money check-up</div><div class="card pad check"><div class="check-h">${scoreRing(D.score)}<div><b class="grade">${esc(D.grade)}</b><p class="note">${D.findings.filter(f => f.level === 'bad').length} to fix · ${D.findings.filter(f => f.level === 'warn').length} to watch · ${D.findings.filter(f => f.level === 'good').length} going well</p></div></div>
+    <div class="finds">${D.findings.map(f => `<div class="find ${f.level}"><span class="fi">${f.icon}</span><div class="grow"><b>${esc(f.title)}</b><p>${esc(f.detail)}</p>${f.act ? `<button class="link" data-act="${f.act.act}" data-id="${f.act.id}">${esc(f.act.label)} ›</button>` : ''}</div></div>`).join('') || '<p class="note">Nothing to flag. Nice work.</p>'}</div></div>`;
+  const stats = `<div class="stat-grid"><div><small>Avg income</small><b>${fmt(Math.round(D.avgInc), cur)}</b></div><div><small>Avg spending</small><b>${fmt(Math.round(D.avgExp), cur)}</b></div>
+    <div><small>Savings rate</small><b class="${D.savingsRate === null ? '' : D.savingsRate >= 0 ? 'pos' : 'neg'}">${D.savingsRate === null ? '—' : Math.round(D.savingsRate * 100) + '%'}</b></div><div><small>Cash runway</small><b>${D.runway === null ? '—' : D.runway.toFixed(1) + ' mo'}</b></div></div>`;
+  const catRows = D.cats.filter(c => c.now || c.avg).slice(0, 8), cmax = Math.max(1, ...catRows.flatMap(c => [c.now, c.avg]));
+  const cats = `<div class="sec-h">Where it goes · this month vs average</div><div class="card pad">${catRows.length ? catRows.map(c => { const d = c.avg ? c.now / c.avg - 1 : null;
+    return `<div class="mrow cat"><span class="ci">${esc(c.ico)}</span><div class="grow"><div class="bal-top"><b>${esc(c.name)}</b><span>${fmt(c.now, cur)}</span></div><div class="bar"><i class="neg" style="width:${c.now / cmax * 100}%"></i></div><div class="bar thin"><i style="width:${c.avg / cmax * 100}%"></i></div></div>
+      <small class="${d === null ? 'muted' : d > .15 ? 'neg' : d < -.15 ? 'pos' : 'muted'}">${d === null ? 'new' : (d > 0 ? '+' : '') + Math.round(d * 100) + '%'}</small></div>`; }).join('') + `<p class="note">Bars: this month (red) and your ${D.last3.length || 3}-month monthly average (grey). Includes your share of shared books.</p>` : '<p class="note">No spending recorded this month.</p>'}</div>`;
+  const rec = D.rec.length ? `<div class="sec-h">Subscriptions &amp; bills</div><div class="card pad">${D.rec.map(x => `<div class="mrow"><span class="tx-ico sm">${x.income ? esc(x.e.cat || '💼') : '🔁'}</span><div class="grow"><b>${esc(x.e.desc)}</b><br><small class="muted">${esc(x.b.personal ? 'My money' : x.b.name)} · next ${x.next ? shortDate(x.next) : '—'}</small></div><span class="${x.income ? 'pos' : ''}">${x.income ? '+' : ''}${fmt(x.monthly, x.cur)}<small class="muted">/mo</small></span></div>`).join('')}
+    <div class="mrow tot"><b>Committed outgoings</b><span>${fmt(D.fixedOut, cur)}<small class="muted">/mo</small> · ${fmt(D.fixedOut * 12, cur)}<small class="muted">/yr</small></span></div></div>` : '';
+  const exp = D.exposure.length ? `<div class="sec-h">Shared books · your position</div><div class="card pad">${D.exposure.map(x => `<button class="mrow link-row" data-act="open-book" data-id="${x.book.id}"><span class="tx-ico sm">${esc(x.book.emoji || '📒')}</span><div class="grow"><b>${esc(x.book.name)}</b></div><span class="${x.mine > 0 ? 'pos' : x.mine < 0 ? 'neg' : 'muted'}">${Math.abs(x.mine) < 1 ? 'settled' : money(x.mine, cur, true)}</span></button>`).join('')}</div>` : '';
+  const top = D.top.length ? `<div class="sec-h">Biggest spends · last 90 days</div><div class="card pad">${D.top.map(r => `<button class="mrow link-row" data-act="edit-entry" data-id="${r.e.id}"><span class="tx-ico sm">${esc(r.e.cat || '🧾')}</span><div class="grow"><b>${esc(r.e.desc)}</b><br><small class="muted">${shortDate(r.date)}${r.shared ? ' · your share' : ''}${r.e.receipts && r.e.receipts.length ? ' · 📎' : ''}</small></div><span>${fmt(r.cost, cur)}</span></button>`).join('')}</div>` : '';
+  return hdr + `<main>${hero}
+    <div class="sec-h">Net worth · 12 months</div><div class="card pad chartcard">${lineChart(D.series.map(x => x.v), D.series.map(x => x.label), cur)}</div>
+    ${check}
+    <div class="sec-h">Cash flow · 12 months</div><div class="card pad chartcard">${barChart(D.months)}<div class="legend"><span><i class="bi"></i>Income</span><span><i class="be"></i>Spending</span></div>${stats}</div>
+    ${cats}${rec}${exp}${top}
+    <p class="note c">How it's worked out: net worth = My money balance + what others owe you − what you owe. Spending = your My money expenses plus your share of shared expenses; loan principal isn't counted as spending. Amounts in other currencies are shown separately, never converted.</p></main>`;
+}
+
+/* ───────────────────────── dashboard slider ───────────────────────── */
+function slideStep(el) { const f = el.firstElementChild; return f ? f.getBoundingClientRect().width + 12 : 0; }
+function wireSlides() {
+  const el = $('#slides'); if (!el) return;
+  const si = S.ui.slide == null ? ((!live('books').filter(b => !b.personal).length && personalBook() && bookEntries(PERSONAL_ID).length) ? 1 : 0) : S.ui.slide;
+  el.scrollLeft = si * slideStep(el);
+  let raf = 0;
+  el.addEventListener('scroll', () => {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      const i = Math.round(el.scrollLeft / (slideStep(el) || 1));
+      document.querySelectorAll('.sl-tabs button').forEach((b, k) => b.classList.toggle('on', k === i));
+      if (S.ui.slide !== i) { S.ui.slide = i; try { localStorage.setItem('sb.slide', JSON.stringify(i)); } catch {} }
+    });
+  }, { passive: true });
+}
+
+/* ───────────────────────── install as an app (PWA) ───────────────────────── */
+let deferredInstall = null;
+const isStandalone = () => { try { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch { return false; } };
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const canInstall = () => !isStandalone() && !S.meta.installed;
+function installSheet(manual) {
+  if ($('.layer.install')) return;
+  const ios = !deferredInstall && isIOS(), generic = !deferredInstall && !ios;
+  const L = openLayer(`<div class="sheet" role="dialog" aria-modal="true" aria-label="Install SplitBook"><div class="grab"></div>
+    <div class="inst-top"><img src="icons/icon-192.png" alt="" width="64" height="64"><div><h2>Install SplitBook</h2><p class="note">One tap from your home screen, full-screen, and it works offline.</p></div></div>
+    ${ios ? `<ol class="inst-steps"><li>Tap the <b>Share</b> button <span class="kbd">⎋</span> in Safari’s toolbar</li><li>Scroll down and tap <b>Add to Home Screen</b></li><li>Tap <b>Add</b></li></ol>`
+      : generic ? `<ol class="inst-steps"><li>Open your browser’s menu <span class="kbd">⋮</span></li><li>Choose <b>Install app</b> or <b>Add to Home screen</b></li></ol>`
+      : `<ul class="inst-pts"><li>⚡ Opens instantly, like any app</li><li>📴 Works offline — sync later</li><li>🔒 Your data stays on your device &amp; your own Drive</li></ul>`}
+    <div class="btns two">${(ios || generic) ? '' : `<button class="btn" data-x="later">Not now</button>`}<button class="${(ios || generic) ? 'cta' : 'btn primary'}" data-x="${(ios || generic) ? 'later' : 'go'}">${(ios || generic) ? 'Got it' : 'Install'}</button></div></div>`, 'bottom install');
+  L.el.addEventListener('click', async e => {
+    const x = e.target.closest('[data-x]'); if (!x) return;
+    if (x.dataset.x === 'go' && deferredInstall) {
+      const ev = deferredInstall; deferredInstall = null; L.close(); try { await ev.prompt(); const r = await ev.userChoice; if (r && r.outcome === 'accepted') { S.meta.installed = true; persist(); } } catch {}
+    } else L.close();
+  });
+  return L;
+}
+function maybeAskInstall() {
+  if (S.meta.installAsked || !canInstall() || !(deferredInstall || isIOS())) return;
+  if ($('.overlay') || $('.layer')) return setTimeout(maybeAskInstall, 6000);       // never interrupt a form
+  S.meta.installAsked = now(); persist(); installSheet(false);
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; setTimeout(maybeAskInstall, 2500); });
+window.addEventListener('appinstalled', () => { deferredInstall = null; S.meta.installed = true; persist(); const l = $('.layer.install'); l && l._close(null); toast('Installed — find SplitBook on your home screen 🎉'); });
+if (isIOS()) setTimeout(maybeAskInstall, 4000);
+
 /* ───────────────────────── events ───────────────────────── */
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-act]'); if (!t || t.closest('.overlay')) return;
@@ -925,9 +1256,15 @@ document.addEventListener('click', e => {
   else if (a === 'tab') { S.ui.tab = d.tab; render(); }
   else if (a === 'new-entry') entrySheet();
   else if (a === 'quick-add') { let last = null; try { last = localStorage.getItem('sb.last'); } catch {} const lb = last && S.doc.books[last]; entrySheet(null, null, lb && !lb.deleted ? last : PERSONAL_ID); }
+  else if (a === 'slide') {
+    const el = $('#slides'), i = +d.i; if (!el) return;
+    document.querySelectorAll('.sl-tabs button').forEach((b, k) => b.classList.toggle('on', k === i));   // react instantly; the scroll listener keeps it in sync after
+    S.ui.slide = i; try { localStorage.setItem('sb.slide', JSON.stringify(i)); } catch {}
+    el.scrollTo({ left: i * slideStep(el), behavior: 'smooth' });
+  }
+  else if (a === 'open-insights') go('insights');
   else if (a === 'open-personal') { S.ui.tab = 'entries'; S.ui.limit = 40; go('book/' + PERSONAL_ID); }
-  else if (a === 'add-income') entrySheet(null, { type: 'income', cat: '💼' }, PERSONAL_ID);
-  else if (a === 'add-expense') entrySheet(null, null, PERSONAL_ID);
+
   else if (a === 'edit-entry') entrySheet(d.id);
   else if (a === 'edit-book') bookSheet(S.ui.bookId);
   else if (a === 'del-book') {

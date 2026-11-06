@@ -27,19 +27,19 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   const yyyymm = () => p.evaluate(() => isoDay(Date.now()).slice(0, 7));
 
   console.log('Income & expenses without any book');
-  ok(await p.isVisible('.mm') && (await p.innerText('.mm')).includes('My money'), 'fresh app shows the My money card — no book needed');
+  ok(await p.isVisible('.hero.alt') && (await p.innerText('.hero.alt')).includes('My money'), 'fresh app has a My money slide on the dashboard — no book needed');
   eq(await p.evaluate(() => live('books').filter(x => !x.personal).length), 0, 'no shared books exist');
-  await p.click('[data-act=add-income]');
-  ok(await p.isVisible('.seg2 button.on:has-text("Income")'), 'Income button opens the sheet on the Income tab');
+  await p.click('.fab'); await p.click('[data-x=type][data-v=income]');
+  ok(await p.isVisible('.seg2 button.on:has-text("Income")'), 'Add → Income tab (no separate dashboard buttons needed)');
   const sheetTxt = await p.innerText('.sheet');
   ok(!/split between|paid by/i.test(sheetTxt), 'personal sheet has no "paid by / split between" clutter');
   ok(/Salary/.test(sheetTxt) && /Freelance/.test(sheetTxt) && !/Groceries/.test(sheetTxt), 'income categories shown (Salary, Freelance…) instead of spending ones');
   await p.fill('#ea', '50000'); await p.fill('#ed', 'Salary'); await p.click('[data-x=save]');
-  await p.click('[data-act=add-expense]'); await p.fill('#ea', '1200'); await p.click('[data-x=cat][data-l="Food"]'); await p.click('[data-x=save]');
+  await p.click('.fab'); await p.fill('#ea', '1200'); await p.click('[data-x=cat][data-l="Food"]'); await p.click('[data-x=save]');
   const st = await p.evaluate(() => monthStats(PERSONAL_ID, isoDay(Date.now()).slice(0, 7)));
   eq(st, { inc: 5000000, exp: 120000, net: 4880000 }, 'month totals: income 50,000 · spent 1,200 · net 48,800');
-  eq(await p.innerText('.mm-n'), await p.evaluate(() => money(4880000, personalBook().currency, true)), 'home card shows the net for the month');
-  ok(!(await p.$('.hero')), 'no "owe / owed" balance card for someone with only personal money');
+  eq(await p.innerText('.hero.alt .hero-n'), await p.evaluate(() => money(4880000, personalBook().currency, true)), 'My money slide shows the net for the month');
+  ok(!/Owed to you/.test(await p.innerText('#app')), 'no "owe / owed" card for someone with only personal money');
   eq(await p.evaluate(() => Object.values(netBalances(PERSONAL_ID)).every(v => v === 0)), true, 'personal entries never create debts');
   const ex = await p.evaluate(() => live('entries').find(e => e.type === 'expense'));
   eq([ex.desc, ex.cat, Object.keys(ex.split).length], ['Food', '🍽️', 1], 'expense saved with category-as-description and a single (own) split');
@@ -73,9 +73,9 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   eq(await p.evaluate(() => live('entries').length), before, 'Undo brings it back');
 
   console.log('Quick-add from home reaches both personal and shared books');
-  await p.click('[data-act=back]'); await p.waitForSelector('.mm');
+  await p.click('[data-act=back]'); await p.waitForSelector('.sl-tabs');
   await p.click('.bk.new'); await p.fill('#bn', 'Trip'); await p.fill('#np', 'Ravi'); await p.click('[data-x=addp]'); await p.click('[data-x=save]');
-  await p.click('[data-act=back]'); await p.waitForSelector('.mm'); await p.click('.fab');
+  await p.click('[data-act=back]'); await p.waitForSelector('.sl-tabs'); await p.click('.fab');
   const chips = await p.$$eval('.sheet [data-x=book]', els => els.map(e => e.textContent.trim()));
   ok(chips.length === 2 && /My money/.test(chips[0]) && /Trip/.test(chips[1]), 'quick-add offers My money (first) and each shared book: ' + chips.join(' | '));
   await p.click('.sheet [data-x=book]:has-text("Trip")'); await p.waitForTimeout(50);
@@ -86,7 +86,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   await p.click('.bk:has-text("Trip")'); await p.waitForSelector('.hero.compact');
   await p.click('[data-tab=members]'); await p.click('[data-act=edit-book]'); await p.fill('#bn', 'Trip to Goa'); await p.click('[data-x=save]');
   eq(await p.innerText('.top h1'), '📒 Trip to Goa', 'title updated the moment you save');
-  await p.click('[data-act=back]'); await p.waitForSelector('.mm');
+  await p.click('[data-act=back]'); await p.waitForSelector('.sl-tabs');
   ok((await p.innerText('.list')).includes('Trip to Goa'), 'home card shows the new name straight away');
 
   console.log('Deleting a book from every tab');
@@ -94,7 +94,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
     await p.evaluate(n => { const id = uid(), me0 = me().id; S.doc.books[id] = { id, name: n, emoji: '📒', currency: 'INR', memberIds: [me0], createdAt: 1, updatedAt: now() }; for (let i = 0; i < 3; i++) { const e = uid(); S.doc.entries[e] = { id: e, bookId: id, type: 'expense', desc: 'x' + i, amount: 100, paidBy: me0, split: { [me0]: 100 }, method: 'equal', date: isoDay(Date.now()), cat: '🧾', createdAt: now() + i, updatedAt: now() }; } touched(); }, 'Doomed ' + tab);
     await p.click('.bk:has-text("Doomed ' + tab + '")'); await p.waitForSelector('.hero.compact'); await p.click('[data-tab=members]'); await p.click('[data-act=del-book]'); await p.click('.dlg [data-x=ok]');
     // while sitting on the People tab the delete button is there; for other tabs navigate via tab → then delete (button lives on People)
-    const st2 = await p.evaluate(() => ({ hash: location.hash, view: S.ui.view, home: !!document.querySelector('.mm') }));
+    const st2 = await p.evaluate(() => ({ hash: location.hash, view: S.ui.view, home: !!document.querySelector('.slides') }));
     ok(st2.hash === '' && st2.view === 'home' && st2.home, `delete (from ${tab} flow) returns to home immediately`);
     ok(!(await p.innerText('.list')).includes('Doomed ' + tab), 'deleted book card is gone');
     await p.click('#toast button');
@@ -108,7 +108,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   const B = await device(); await B.p.evaluate(() => { S.meta.wasSignedIn = true; persist(); }); await B.p.evaluate(() => sync(true));
   eq(await B.p.evaluate(() => live('books').filter(x => x.personal).length), 1, 'second device ends up with exactly one My money book');
   eq(await B.p.evaluate(() => monthStats(PERSONAL_ID, isoDay(Date.now()).slice(0, 7))), await p.evaluate(() => monthStats(PERSONAL_ID, isoDay(Date.now()).slice(0, 7))), 'income/expense totals identical on both devices');
-  await B.p.click('[data-act=add-expense]'); await B.p.fill('#ea', '300'); await B.p.fill('#ed', 'Snacks from B'); await B.p.click('[data-x=save]');
+  await B.p.click('.fab'); await B.p.fill('#ea', '300'); await B.p.fill('#ed', 'Snacks from B'); await B.p.click('[data-x=save]');
   await B.p.waitForTimeout(1200);
   ok(!!drive && Object.values(drive.entries).some(e => e.desc === 'Snacks from B'), 'a change is uploaded automatically within ~1s (no manual sync)');
   await p.evaluate(() => sync(false));
@@ -121,7 +121,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   eq(await B.p.innerText('.top h1'), '📒 Renamed on A', "rename on one device appears on the other's open screen");
   await p.evaluate(id => { const t = now(); live('entries').filter(e => e.bookId === id).forEach(e => { S.doc.entries[e.id] = { id: e.id, deleted: true, updatedAt: t, bookId: id }; }); S.doc.books[id] = { id, deleted: true, updatedAt: t }; touched(); }, tripId);
   await p.waitForTimeout(900); await B.p.evaluate(() => sync(true));
-  const bs = await B.p.evaluate(() => ({ view: S.ui.view, hash: location.hash, home: !!document.querySelector('.mm'), books: live('books').filter(x => !x.personal).length }));
+  const bs = await B.p.evaluate(() => ({ view: S.ui.view, hash: location.hash, home: !!document.querySelector('.slides'), books: live('books').filter(x => !x.personal).length }));
   ok(bs.view === 'home' && bs.hash === '' && bs.home && bs.books === 0, 'a book deleted on A while open on B sends B home, no crash');
 
   console.log('Sample data and currency');
@@ -131,7 +131,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   await p.evaluate(() => clearSampleData());
   eq(await p.evaluate(() => [!!personalBook(), live('entries').filter(e => isSample(e.id)).length]), [true, 0], 'removing samples keeps My money and your own entries');
   await p.click('.iconbtn[data-act=settings]'); await p.click('[data-x=pcur]'); await p.fill('#cq', 'EUR'); await p.click('.cur-row[data-v=EUR]');
-  ok(/€/.test(await p.innerText('.mm-n')) || /€/.test(await p.innerText('#app')), 'My money currency can be changed in Settings');
+  ok(/€/.test(await p.innerText('.hero.alt .hero-n')) || /€/.test(await p.innerText('#app')), 'My money currency can be changed in Settings');
   ok(all.every(d => d.errors.length === 0), 'no JS errors on any device');
   ok(all.every(d => d.dialogs.length === 0), 'no native alert/confirm/prompt dialogs were ever shown');
 

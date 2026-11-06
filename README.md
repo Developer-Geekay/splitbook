@@ -8,6 +8,10 @@ equally / by exact amount / by % / by shares, see balances and suggested settle-
   (scope `drive.appdata`, so the app can't see any of your other files).
 * **Offline sync** – edits made offline are queued and synced when you're back online (on reconnect,
   on app focus, every minute). Devices are merged per record with last-writer-wins; deletions are tombstones.
+* **Dashboard slider** – swipe between **Overall** (shared balances) and **My money** (this month). One floating **Add** button for everything.
+* **Net worth & insights** (📊) – net worth now and over 12 months, a *money check-up* score with findings (savings rate, spending pace, category spikes, fixed-bill load, cash runway, overdue loans, unusual spends, possible duplicates, missing receipts), cash-flow charts, subscriptions & bills, shared-book exposure.
+* **Receipts** – attach photos (auto-shrunk) or PDFs to any entry; stored on the device, synced to your Drive as separate files, downloaded on demand on other devices.
+* **Install prompt** – offered once on first visit (Android/desktop; Share → Add to Home Screen steps on iPhone) and always available in Settings until installed.
 * **My money** – built-in personal space for **income and expenses**, no book needed: monthly totals, recurring salary/rent/bills, a 6-month summary and spending by category.
 * **Recurring entries** – mark any expense *Every week / month / year* (Netflix, rent, bills). Past and due occurrences are created automatically, safe across devices (deterministic ids, no duplicates, deleted ones stay deleted).
 * **Loans** – pick the 💸 *Loan* category to lend/borrow with optional interest (% per year, simple) and a due date. See repaid/outstanding, overdue badges, a home-screen reminder, one-tap repayment, and *add interest to balance*.
