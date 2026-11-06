@@ -677,7 +677,7 @@ function bookSheet(id) {
       <label class="field"><span>Name</span><input id="bn" value="${esc(B.name)}" placeholder="Goa trip, Flat 4B…" maxlength="60" autocomplete="off"></label>
       <div class="field"><span>Icon</span><div class="emojis">${EMOJIS.map(e => `<button data-x="emoji" data-v="${e}" class="${B.emoji === e ? 'on' : ''}">${e}</button>`).join('')}</div></div>
       <div class="field"><span>Currency</span><button class="curbtn" data-x="cur"><b>${esc(symbol(B.currency))} ${B.currency}</b><small>${esc(curName(B.currency))}</small><i>›</i></button>${ex ? '<p class="note">Changing it keeps the same numbers — no exchange-rate conversion.</p>' : ''}</div>
-      <div class="field"><span>Who's in this book?</span><div class="pcs">${people.map(p => `<button class="pc ${B.memberIds.includes(p.id) ? 'on' : ''}" data-x="mem" data-v="${p.id}">${avatar(p.id, 'xs')}${esc(p.isMe ? 'You' : p.name)}</button>`).join('')}</div>
+      <div class="field"><span>Who's in this book?</span><div class="pcs">${people.map(p => `<button class="pc ${B.memberIds.includes(p.id) ? 'on' : ''}" data-x="mem" data-v="${p.id}">${avatar(p.id, 'xs')}<span class="pn">${esc(p.isMe ? 'You' : p.name)}</span></button>`).join('')}</div>
       <div class="addrow"><input id="np" placeholder="Add someone new…" autocomplete="off"><button class="btn" data-x="addp">Add</button></div></div>
       <button class="cta" data-x="save">${ex ? 'Save changes' : 'Create book'}</button>`;
   };
@@ -754,7 +754,7 @@ function entrySheet(entryId, preset, bookId) {
     }
     const sb = $('#savebtn', root); if (sb) sb.textContent = (ex ? 'Save' : E.type === 'settle' ? 'Record payment' : E.type === 'income' ? 'Add income' : isLoanForm() ? 'Add loan' : 'Add expense') + (total ? ` · ${fmt(total, cur)}` : '');
   }
-  const pc = (id, on, x) => `<button class="pc ${on ? 'on' : ''}" data-x="${x}" data-v="${id}">${avatar(id, 'xs')}${esc(pname(id))}</button>`;
+  const pc = (id, on, x) => `<button class="pc ${on ? 'on' : ''}" data-x="${x}" data-v="${id}">${avatar(id, 'xs')}<span class="pn">${esc(pname(id))}</span></button>`;
 
   const isLoanForm = () => !b.personal && E.type === 'expense' && E.cat === '💸' && E.sel.length === 1 && E.sel[0] !== E.paidBy && !(ex && ex.interestFor);
   function draw() {
@@ -783,7 +783,7 @@ function entrySheet(entryId, preset, bookId) {
       <div class="btns"><button class="cta" id="savebtn" data-x="save"></button>${ex ? `<button class="btn danger" data-x="del" aria-label="Delete">🗑</button>` : ''}</div>`;
     updateCalc(); if (typeof fitAmount === 'function') fitAmount(); hydrateReceipts(root);
   }
-  const fitAmount = () => { const a = $('#ea', root); if (!a) return; const n = a.value.length; a.style.fontSize = n > 13 ? '28px' : n > 10 ? '34px' : n > 8 ? '42px' : ''; };
+  const fitAmount = () => { const a = $('#ea', root); if (!a) return; a.style.fontSize = ''; let px = parseFloat(getComputedStyle(a).fontSize); while (a.scrollWidth > a.clientWidth + 1 && px > 16) { px -= 2; a.style.fontSize = px + 'px'; } };
   const pull = () => {
     const g = id => root.querySelector(id);
     if (g('#ed')) E.desc = g('#ed').value; if (g('#ea')) E.amount = g('#ea').value; if (g('#edt')) E.date = g('#edt').value || E.date; if (g('#en')) E.note = g('#en').value;

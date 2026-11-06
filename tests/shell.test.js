@@ -82,7 +82,8 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
     return out;
   };
   for (const w of [320, 360, 390, 430]) {
-    const D = await dev({ width: w, locale: 'en-IN' }), pg = D.p, bad = {}; const chk = async n => { const r = await pg.evaluate(detect); if (r.length) bad[n] = r; };
+    const D = await dev({ width: w, locale: 'en-IN' }), pg = D.p, bad = {};
+    await pg.addStyleTag({ content: '*{font-family:"DejaVu Sans",Verdana,sans-serif !important;letter-spacing:.015em}' });   /* worst-case wide font: CI runners render wider than a dev machine */ const chk = async n => { const r = await pg.evaluate(detect); if (r.length) bad[n] = r; };
     await pg.evaluate(() => { loadSampleData(); const R = 'smp-p-ravi'; S.doc.people[R].name = 'Bartholomew Montgomery-Smythe'; S.doc.people['smp-p-meera'].name = 'Alexandria Vandersloot'; touched(); });
     await pg.click('.fab'); await pg.waitForSelector('.sheet'); await pg.fill('#ea', '9876543.21'); await pg.fill('#ed', 'A very long description of what this expense was actually for'); await chk('personal expense');
     await pg.click('[data-x=type][data-v=income]'); await chk('personal income'); await pg.click('[data-x=rep][data-v=monthly]'); await chk('income + repeat');
