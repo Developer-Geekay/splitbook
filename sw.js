@@ -21,3 +21,11 @@ self.addEventListener('fetch', e => {
     return (await net) || (req.mode === 'navigate' ? cache.match('index.html') : Response.error());
   }));
 });
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    for (const c of list) if ('focus' in c) return c.focus();
+    return self.clients.openWindow((e.notification.data && e.notification.data.url) || './');
+  }));
+});

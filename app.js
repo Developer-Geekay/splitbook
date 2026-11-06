@@ -203,6 +203,7 @@ async function sync(interactive) {
     // Brand-new device: adopt remote wholesale instead of merging a pristine local doc.
     const pristine = !live('books').filter(b => !b.personal).length && !live('entries').length;
     if (remote && pristine) { for (const p of live('people')) if (p.isMe && !(remote.people && remote.people[p.id])) delete S.doc.people[p.id]; }
+    const before = S.meta.lastSync && !pristine ? new Set(Object.keys(S.doc.entries)) : null;
     const m = mergeDocs(S.doc, remote);
     S.doc = m.doc;
     ensureMe(); ensurePersonal();
@@ -210,7 +211,7 @@ async function sync(interactive) {
     if (!remote || m.remoteStale || S.meta.dirty) id = await driveWrite(id, S.doc);
     S.meta.fileId = id; S.meta.dirty = false; S.meta.lastSync = now();
     S.sync = { state: 'idle', error: '' };
-    persist(); render(); materializeRecurring(); syncReceipts();
+    persist(); render(); materializeRecurring(); syncReceipts(); activityAlerts(before); checkAlerts();
   } catch (e) {
     S.sync = { state: 'err', error: e.message }; console.warn('sync', e); paintStatus();
   } finally { syncing = false; }
@@ -587,6 +588,11 @@ function loansBlock(b) {
     <div class="btns"><button class="btn sm" data-act="repay-loan" data-id="${r.id}">${eT("Record repayment")}</button>${r.pending > 0 ? `<button class="btn sm ghost" data-act="charge-interest" data-id="${r.id}">${eT('+ {amt} interest', { amt: fmt(r.pending, cur) })}</button>` : ''}</div></div>`;
   return `<div class="sec-h">${eT("Loans")}</div>` + open.map(card).join('') + done.map(r => `<div class="loan done">✓ ${esc(r.entry.desc)} <small>· ${eT("fully repaid")}</small></div>`).join('');
 }
+function loanTitle(r, m) {
+  const who = r.lender === m.id ? pname(r.borrower) : null, d = r.daysLeft;
+  return r.overdue ? (who ? Tn(-d, '{who}’s loan overdue by {n} day', '{who}’s loan overdue by {n} days', { who }) : Tn(-d, 'Your loan overdue by {n} day', 'Your loan overdue by {n} days'))
+    : d === 0 ? (who ? T('{who}’s loan due today', { who }) : T('Your loan due today')) : (who ? Tn(d, '{who}’s loan due in {n} day', '{who}’s loan due in {n} days', { who }) : Tn(d, 'Your loan due in {n} day', 'Your loan due in {n} days'));
+}
 function dueBanner() {
   const m = me(); if (!m) return ''; let best = null;
   for (const b of live('books')) for (const r of loanReport(b.id)) {
@@ -594,12 +600,71 @@ function dueBanner() {
     if (r.daysLeft <= 7 && (!best || r.daysLeft < best.r.daysLeft)) best = { r, b };
   }
   if (!best) return '';
-  const { r, b } = best, who = r.lender === m.id ? pname(r.borrower) : null, d = r.daysLeft;
-  const title = r.overdue ? (who ? Tn(-d, '{who}’s loan overdue by {n} day', '{who}’s loan overdue by {n} days', { who }) : Tn(-d, 'Your loan overdue by {n} day', 'Your loan overdue by {n} days'))
-    : d === 0 ? (who ? T('{who}’s loan due today', { who }) : T('Your loan due today')) : (who ? Tn(d, '{who}’s loan due in {n} day', '{who}’s loan due in {n} days', { who }) : Tn(d, 'Your loan due in {n} day', 'Your loan due in {n} days'));
+  const { r, b } = best, title = loanTitle(r, m);
   return `<button class="banner due" data-act="open-loans" data-id="${b.id}"><span>⏰</span><span><b>${esc(title)}</b><small>${fmt(r.out + r.intDebt, b.currency)} · ${esc(b.name)}</small></span><i>›</i></button>`;
 }
 
+
+/* ───────────────────────── notifications (local: no server) ───────────────────────── */
+const notifSupported = () => 'Notification' in window;
+const notifGranted = () => notifSupported() && Notification.permission === 'granted';
+const nPref = k => { const n = S.meta.notif; return !!(n && n.on && n[k] !== false) && notifGranted(); };
+async function showNote(it) {
+  const opt = { body: it.body, tag: it.key, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', lang: LANG, data: { url: './' } };
+  try { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (reg && reg.showNotification) return await reg.showNotification(it.title, opt); } catch {}
+  try { new Notification(it.title, opt); } catch {}
+}
+function deliver(items) {
+  const done = S.meta.notified = S.meta.notified || {}, t = now(); let any = false;
+  for (const it of items) { if (done[it.key]) continue; done[it.key] = t; any = true; showNote(it); }
+  for (const k of Object.keys(done)) if (t - done[k] > 60 * 864e5) delete done[k];
+  if (any) persist();
+}
+function alertCandidates() {
+  const m = me(), out = []; if (!m) return out;
+  const today = isoDay(Date.now()), yest = isoDay(Date.now() - 864e5), tom = isoDay(Date.now() + 864e5);
+  if (nPref('bills')) for (const e of live('entries')) {
+    if (!e.repeat || !PERIOD[e.repeat] || e.type === 'income') continue;
+    const b = S.doc.books[e.bookId]; if (!b || b.deleted) continue;
+    const mine = b.personal ? e.amount : (e.split[m.id] || 0); if (!mine) continue;
+    const d = nextDue(e, yest); if (!d || d > tom) continue;
+    out.push({ key: 'bill:' + e.id + ':' + d, title: d === today ? T('{desc} due today', { desc: e.desc }) : T('{desc} due tomorrow', { desc: e.desc }), body: fmt(mine, b.currency) + ' · ' + (b.personal ? T('My money') : b.name) });
+  }
+  if (nPref('loans')) for (const b of live('books')) for (const r of loanReport(b.id)) {
+    if (r.settled || !r.due || (r.lender !== m.id && r.borrower !== m.id) || r.daysLeft > 2) continue;
+    out.push({ key: 'loan:' + b.id + ':' + r.lender + ':' + r.borrower + ':' + r.due + ':' + (r.overdue ? today : 'soon'), title: loanTitle(r, m), body: fmt(r.out + r.intDebt, b.currency) + ' · ' + b.name });
+  }
+  return out;
+}
+let lastAlertCheck = 0;
+function checkAlerts(force) {
+  if (!force && now() - lastAlertCheck < 5 * 60e3) return; lastAlertCheck = now();
+  if (!notifGranted() || !(S.meta.notif && S.meta.notif.on)) return;
+  try { deliver(alertCandidates()); } catch (e) { console.warn('alerts', e); }
+}
+function activityAlerts(before) {          // entries other people added in a shared book (arrived through sync)
+  const m = me(); if (!m || !nPref('activity') || !before) return;
+  const items = [];
+  for (const e of live('entries')) {
+    if (before.has(e.id) || e.fromRule || e.paidBy === m.id) continue;
+    const b = S.doc.books[e.bookId]; if (!b || b.deleted || b.personal) continue;
+    const cur = b.currency;
+    if (e.type === 'settle') { if (e.split[m.id] === undefined) continue; items.push({ key: 'act:' + e.id, title: T('{who} paid you {amt}', { who: pname(e.paidBy), amt: fmt(e.amount, cur) }), body: b.name }); }
+    else { const mine = e.split[m.id] || 0; if (!mine) continue; items.push({ key: 'act:' + e.id, title: T('{who} added “{desc}”', { who: pname(e.paidBy), desc: e.desc || T('Expense') }), body: T('You owe {amt}', { amt: fmt(mine, cur) }) + ' · ' + b.name }); }
+  }
+  if (items.length > 3) deliver([{ key: 'actn:' + items.map(i => i.key).join().slice(-40), title: Tn(items.length, '{n} new update in shared books', '{n} new updates in shared books'), body: items.slice(0, 3).map(i => i.title).join(' · ') }]);
+  else deliver(items);
+}
+async function setNotif(on) {
+  if (on) {
+    if (!notifSupported()) { toast(T("This browser doesn't support notifications.")); return false; }
+    let perm = Notification.permission; if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch {} }
+    if (perm !== 'granted') { toast(T('Notifications are blocked. Allow them in your browser’s site settings.')); return false; }
+    S.meta.notif = { bills: true, loans: true, activity: true, ...(S.meta.notif || {}), on: true }; persist();
+    showNote({ key: 'test:' + now(), title: T('Notifications are on'), body: T('You will be reminded about bills, dues and payments.') }); checkAlerts(true); return true;
+  }
+  S.meta.notif = { ...(S.meta.notif || {}), on: false }; persist(); return true;
+}
 
 /* ───────────────────────── dashboard: quick info + recent activity ───────────────────────── */
 function dashData() {
@@ -979,6 +1044,11 @@ function settingsSheet() {
     <div class="lbl">${eT('Language')}</div><button class="curbtn" data-x="lang"><b>${esc(langInfo()[1])}</b><small>${esc(langInfo()[2])}</small><i>›</i></button>
     <div class="lbl">${eT("Your name")}</div>
     <div class="addrow"><input id="myname" value="${esc((m || {}).name || '')}"><button class="btn" data-x="savename">${eT("Save")}</button></div>
+    <div class="lbl">${eT('Notifications')}</div>
+    <div class="card pad">${[['on', T('Remind me about bills, dues and payments'), ''], ['bills', T('Bills'), T('Recurring bills due today or tomorrow')], ['loans', T('Loans & dues'), T('Loans due soon or overdue')], ['activity', T('Payments & activity'), T('When someone adds an expense or pays you')]].map(([k, t, d]) => { const nn = S.meta.notif || {}, on = k === 'on' ? nn.on && notifGranted() : nn.on && nn[k] !== false;
+      return `<button class="togrow nrow ${k === 'on' ? '' : 'sub'}" data-x="n-${k}" ${k !== 'on' && !(nn.on && notifGranted()) ? 'disabled' : ''}><div class="grow"><b>${esc(t)}</b>${d ? `<small>${esc(d)}</small>` : ''}</div><span class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${!!on}"><i></i></span></button>`; }).join('')}
+      <p class="note">${eT('Alerts show while SplitBook is open or was used recently — there is no server to send them when it is closed.')}</p>
+      ${S.meta.notif && S.meta.notif.on && notifGranted() ? `<button class="btn" data-x="n-test">${eT('Send a test notification')}</button>` : ''}</div>
     <div class="lbl">${eT('Voice')}</div>
     <div class="card pad togrow"><div class="grow"><b>${eT('Auto-detect spoken language')}</b><small>${eT('Understands any language, online or offline')} · ${eT('Coming soon')}</small></div><span class="switch" role="switch" aria-checked="false" aria-disabled="true" aria-label="${eT('Auto-detect spoken language')}"><i></i></span></div>
     <p class="note">${eT('For now voice listens in your app language ({lang}).', { lang: langInfo()[1] })}</p>
@@ -998,6 +1068,9 @@ function settingsSheet() {
     else if (x === 'in') { closeSheet(); await signIn(); }
     else if (x === 'out') { closeSheet(); signOut(); }
     else if (x === 'sync') { closeSheet(); await sync(true); toast(S.sync.state === 'err' ? T('Sync failed: {e}', { e: S.sync.error }) : T('Synced ✓')); }
+    else if (x === 'n-on') { await setNotif(!(S.meta.notif && S.meta.notif.on && notifGranted())); settingsSheet(); }
+    else if (x === 'n-bills' || x === 'n-loans' || x === 'n-activity') { const k = x.slice(2); S.meta.notif = { ...S.meta.notif, [k]: S.meta.notif[k] === false }; persist(); checkAlerts(true); settingsSheet(); }
+    else if (x === 'n-test') { showNote({ key: 'test:' + now(), title: T('Notifications are on'), body: T('You will be reminded about bills, dues and payments.') }); }
     else if (x === 'savename') { const n = $('#myname', o).value.trim(); if (m && n) { put('people', { ...m, name: n }); toast(T('Saved')); } }
     else if (x === 'sample-load') { closeSheet(); loadSampleData(); go(''); toast(T('Sample data loaded')); }
     else if (x === 'sample-clear') { closeSheet(); clearSampleData(); go(''); toast(T('Sample data removed')); }
@@ -1521,8 +1594,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id
 window.addEventListener('hashchange', route);
 window.addEventListener('online', () => { render(); sync(false); });
 window.addEventListener('offline', () => { render(); toast(T('Offline — everything is saved on this device')); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { materializeRecurring(); sync(false); } });
-setInterval(() => { if (!document.hidden) { materializeRecurring(); sync(false); } }, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { materializeRecurring(); checkAlerts(); sync(false); } });
+setInterval(() => { if (!document.hidden) { materializeRecurring(); checkAlerts(); sync(false); } }, 15000);
 window.addEventListener('focus', () => sync(false));
 window.addEventListener('storage', e => { if (e.key === 'sb.doc') { S.doc = jget('sb.doc', S.doc); render(); } });
 
@@ -1540,5 +1613,5 @@ if ('serviceWorker' in navigator) {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
   }).catch(e => console.warn('sw', e));
 }
-ensureMe(); ensurePersonal(); route(); materializeRecurring();
+ensureMe(); ensurePersonal(); route(); materializeRecurring(); checkAlerts(true);
 if (S.meta.wasSignedIn) sync(false);
