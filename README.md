@@ -8,6 +8,7 @@ equally / by exact amount / by % / by shares, see balances and suggested settle-
   (scope `drive.appdata`, so the app can't see any of your other files).
 * **Offline sync** – edits made offline are queued and synced when you're back online (on reconnect,
   on app focus, every minute). Devices are merged per record with last-writer-wins; deletions are tombstones.
+* **Six languages** – English, हिन्दी, বাংলা, मराठी, తెలుగు, தமிழ். Auto-detected from your phone, switchable in Settings or with one tap on the welcome card. Amounts keep Latin digits with Indian (lakh) grouping. Translations live in `i18n.js`; a test checks that every string exists in every language and that no screen leaks English.
 * **Dashboard slider** – swipe between **Overall** (shared balances) and **My money** (this month). One floating **Add** button for everything.
 * **Net worth & insights** (📊) – net worth now and over 12 months, a *money check-up* score with findings (savings rate, spending pace, category spikes, fixed-bill load, cash runway, overdue loans, unusual spends, possible duplicates, missing receipts), cash-flow charts, subscriptions & bills, shared-book exposure.
 * **Receipts** – attach photos (auto-shrunk) or PDFs to any entry; stored on the device, synced to your Drive as separate files, downloaded on demand on other devices.

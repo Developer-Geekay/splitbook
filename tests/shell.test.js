@@ -2,7 +2,7 @@
 const { chromium } = require('playwright');
 const assert = require('assert');
 const { start } = require('./serve');
-const { makeDrive, newDevice } = require('./harness');
+const { makeDrive, newDevice, layoutDetect } = require('./harness');
 let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', m); };
 const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${JSON.stringify(a)}${JSON.stringify(a) === JSON.stringify(b) ? '' : ' (expected ' + JSON.stringify(b) + ')'}`);
 
@@ -69,18 +69,7 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   eq(await G.p.evaluate(() => S.meta.installed), true, 'and is remembered');
 
   console.log('Layout sweep (no overlaps, no sideways scrolling) at 320 / 360 / 390 / 430 px');
-  const detect = () => {
-    const root = document.querySelector('.layer .sheet, .layer .dlg, .overlay .sheet'); if (!root) return ['no sheet'];
-    const out = [], sr = root.getBoundingClientRect(), scroller = e => { for (let n = e.parentElement; n && n !== root; n = n.parentElement) { const o = getComputedStyle(n).overflowX; if (o === 'auto' || o === 'scroll') return true; } return false; };
-    const els = [...root.querySelectorAll('input:not([type=checkbox]):not([type=file]),button,select,textarea,label.rc,.cur-row,.pc,.who label')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden' });
-    const nm = e => (e.id || e.dataset.x || e.className || e.tagName).toString().slice(0, 24);
-    for (const e of els) { if (scroller(e)) continue; const r = e.getBoundingClientRect(); if (r.right > sr.right + 1 || r.left < sr.left - 1) out.push('OVERFLOW ' + nm(e) + ' ' + Math.round(r.left) + '..' + Math.round(r.right)); }
-    for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) { const a = els[i], c = els[j]; if (a.contains(c) || c.contains(a) || a.classList.contains('rc-x') || c.classList.contains('rc-x')) continue; /* the × badge sits on its tile by design */ const x = a.getBoundingClientRect(), y = c.getBoundingClientRect();
-      if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 2 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 2) out.push('OVERLAP ' + nm(a) + ' × ' + nm(c)); }
-    if (document.documentElement.scrollWidth > innerWidth + 1) out.push('PAGE scrolls sideways');
-    const a = document.querySelector('#ea'); if (a && a.scrollWidth > a.clientWidth + 1) out.push('AMOUNT clipped');
-    return out;
-  };
+  const detect = layoutDetect;
   for (const w of [320, 360, 390, 430]) {
     const D = await dev({ width: w, locale: 'en-IN' }), pg = D.p, bad = {};
     await pg.addStyleTag({ content: '*{font-family:"DejaVu Sans",Verdana,sans-serif !important;letter-spacing:.015em}' });   /* worst-case wide font: CI runners render wider than a dev machine */ const chk = async n => { const r = await pg.evaluate(detect); if (r.length) bad[n] = r; };

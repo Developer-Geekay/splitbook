@@ -13,7 +13,7 @@
   --hero:linear-gradient(135deg,#1b1840 0%,#2e2a85 55%,#5b21b6 100%);--sh:none}}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 ui-rounded,"SF Pro Rounded",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 ui-rounded,"SF Pro Rounded",system-ui,-apple-system,"Segoe UI",Roboto,"Nirmala UI","Noto Sans Devanagari","Noto Sans Bengali","Noto Sans Telugu","Noto Sans Tamil",sans-serif;-webkit-font-smoothing:antialiased}
 body.noscroll{overflow:hidden}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;border:0;background:none;padding:0;transition:transform .12s ease,background .15s,opacity .15s}
@@ -283,3 +283,11 @@ select{width:100%;padding:13px 14px;border-radius:14px;border:1.5px solid transp
 .pc{max-width:100%;min-width:0}.pc .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.pc .av{flex:none}
 .pcs:not(.scroll) .pc{max-width:100%}
 .pcs.scroll .pc{max-width:80vw}
+
+/* ---- languages ---- */
+.lang-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}
+.lang-chips button{padding:6px 12px;border-radius:99px;background:rgba(255,255,255,.14);color:#fff;font-size:13.5px;font-weight:600;border:1.5px solid transparent}
+.lang-chips button.on{background:#fff;color:#312e81}
+body{line-height:1.5}.hero-n,.mm-n{line-height:1.15}
+.tabs button{flex:1 1 0;min-width:0;padding:9px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:clamp(12px,3.7vw,14px)}
+.sl-tabs button{white-space:nowrap}

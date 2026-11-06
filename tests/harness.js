@@ -35,4 +35,25 @@ async function newDevice(browser, appUrl, drive, opts = {}) {
   await p.goto(appUrl); return { ctx, p };
 }
 async function signIn(p) { await p.evaluate(() => { S.meta.wasSignedIn = true; S.meta.user = { given_name: 'Asha' }; persist(); }); await p.evaluate(() => sync(true)); }
-module.exports = { makeDrive, newDevice, signIn };
+/* Noto Indic fonts (devDependencies) so Hindi/Bengali/Telugu/Tamil text is measured with real glyph widths, even on a bare CI runner. */
+const fs = require('fs'), path = require('path');
+const FONTS = [['Noto Sans Devanagari', 'devanagari'], ['Noto Sans Bengali', 'bengali'], ['Noto Sans Telugu', 'telugu'], ['Noto Sans Tamil', 'tamil']];
+function indicFontCss() {
+  return FONTS.map(([fam, k]) => [400, 700].map(w => { const f = path.join(__dirname, '..', 'node_modules', '@fontsource', 'noto-sans-' + k, 'files', `noto-sans-${k}-${k}-${w}-normal.woff2`);
+    return `@font-face{font-family:"${fam}";font-weight:${w};src:url(data:font/woff2;base64,${fs.readFileSync(f).toString('base64')}) format("woff2")}`; }).join('')).join('');
+}
+async function addIndicFonts(page) { await page.addStyleTag({ content: indicFontCss() }); }
+/* Run in the page: reports overlaps / sideways overflow inside the open sheet, picker or dialog. */
+const layoutDetect = () => {
+  const root = document.querySelector('.layer .sheet, .layer .dlg, .overlay .sheet'); if (!root) return ['no sheet'];
+  const out = [], sr = root.getBoundingClientRect(), scroller = e => { for (let n = e.parentElement; n && n !== root; n = n.parentElement) { const o = getComputedStyle(n).overflowX; if (o === 'auto' || o === 'scroll') return true; } return false; };
+  const els = [...root.querySelectorAll('input:not([type=checkbox]):not([type=file]),button,select,textarea,label.rc,.cur-row,.pc,.who label')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; });
+  const nm = e => (e.id || e.dataset.x || e.className || e.tagName).toString().slice(0, 24);
+  for (const e of els) { if (scroller(e)) continue; const r = e.getBoundingClientRect(); if (r.right > sr.right + 1 || r.left < sr.left - 1) out.push('OVERFLOW ' + nm(e) + ' ' + Math.round(r.left) + '..' + Math.round(r.right)); }
+  for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) { const a = els[i], c = els[j]; if (a.contains(c) || c.contains(a) || a.classList.contains('rc-x') || c.classList.contains('rc-x')) continue; const x = a.getBoundingClientRect(), y = c.getBoundingClientRect();
+    if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 2 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 2) out.push('OVERLAP ' + nm(a) + ' × ' + nm(c)); }
+  if (document.documentElement.scrollWidth > innerWidth + 1) out.push('PAGE scrolls sideways');
+  const a = document.querySelector('#ea'); if (a && a.scrollWidth > a.clientWidth + 1) out.push('AMOUNT clipped');
+  return out;
+};
+module.exports = { makeDrive, newDevice, signIn, addIndicFonts, layoutDetect };
