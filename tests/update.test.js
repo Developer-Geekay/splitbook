@@ -8,12 +8,13 @@ let pass = 0; const ok = (c, m) => { assert(c, m); pass++; console.log('  ✓', 
 
 (async () => {
   const os = require('os'), path = require('path'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbupd-'));
-  for (const f of ['index.html', 'styles.css', 'app.js', 'i18n.js', 'voice.js', 'config.js', 'manifest.webmanifest', 'sw.js']) fs.copyFileSync(path.join(__dirname, '..', f), path.join(dir, f));
+  for (const f of ['index.html', 'styles.css', 'app.js', 'i18n.js', 'voice.js', 'manifest.webmanifest', 'sw.js']) fs.copyFileSync(path.join(__dirname, '..', f), path.join(dir, f));
+  fs.writeFileSync(path.join(dir, 'config.js'), 'window.SPLITBOOK_CONFIG={GOOGLE_CLIENT_ID:""};');
   fs.cpSync(path.join(__dirname, '..', 'icons'), path.join(dir, 'icons'), { recursive: true });
   const srv = await start(0, dir), URL = 'http://localhost:' + srv.address().port + '/index.html', b = await chromium.launch();
   
   const { ctx, p } = await newDevice(b, URL, makeDrive(), { ctx: { serviceWorkers: 'allow' }, init: () => {} });
-  await p.reload(); await p.waitForSelector('.slides');
+  await p.waitForSelector('.slides');
   await p.waitForFunction(() => navigator.serviceWorker.controller && typeof swReg !== 'undefined' && swReg && swReg.active);
   console.log('Main screen');
   ok(!(await p.$('.micfab')), 'no mic button beside the Add button');
