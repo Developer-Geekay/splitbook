@@ -57,7 +57,9 @@ function del(coll, id) {
   S.doc[coll][id] = { id, deleted: true, updatedAt: now(), bookId: o.bookId }; // tombstone
   touched(); return o;
 }
-function touched() { S.meta.dirty = true; persist(); render(); scheduleSync(); }
+let batching = 0, batchPending = false;
+function touched() { if (batching) { batchPending = true; return; } S.meta.dirty = true; persist(); render(); scheduleSync(); }
+function batchPuts(fn) { batching++; try { fn(); } finally { batching--; if (!batching && batchPending) { batchPending = false; touched(); } } }
 
 /* Merge two docs: per-record last-writer-wins (tombstones included). */
 function mergeDocs(local, remote) {
@@ -498,11 +500,13 @@ function pickCurrency(current) {
 function changeCurrency(bookId, cur) {
   const b = S.doc.books[bookId]; if (!b || b.currency === cur) return;
   const k = digits(cur) - digits(b.currency), m = 10 ** Math.abs(k), conv = v => k >= 0 ? v * m : Math.round(v / m);
+  batchPuts(() => {
   for (const e of bookEntries(bookId)) {
     const amount = conv(e.amount), keys = Object.keys(e.split), w = {}; keys.forEach(i => w[i] = e.split[i]);
     put('entries', { ...e, amount, split: keys.length ? (k >= 0 ? Object.fromEntries(keys.map(i => [i, e.split[i] * m])) : byWeights(amount, w)) : {} });
   }
   put('books', { ...b, currency: cur });
+  });
 }
 
 /* ───────────────────────── UI: toast & routing ───────────────────────── */
@@ -735,6 +739,7 @@ function homeView() {
   })() : (pb && bookEntries(PERSONAL_ID).length) ? `<section class="hero soft"><div class="hero-art">${art('split')}</div><div class="hero-l">${eT("Shared balances")}</div><div class="hero-t">${eT("Split costs with friends")}</div>
       <p class="hero-p">${eT("Make a book for a trip, your flat or a group — add expenses and see who owes who")}.</p><div class="hero-links"><button data-act="new-book">＋ ${eT("New shared book")}</button><button data-act="open-insights">${eT("Net worth & insights")} ›</button></div></section>` : `<section class="hero welcome"><div class="hero-l">${eT("Welcome to SplitBook")}</div><div class="hero-t">${eT("Your money")},<br>${eT("on your own terms")}.</div>
       <ol class="steps"><li><i>1</i>${hT('Add income & expenses to {mm}', { mm: '<b>' + eT('My money') + '</b>' })}</li><li><i>2</i>${eT("Make a book to split costs with others")}</li><li><i>3</i>${eT("See who owes who and settle up")}</li></ol>
+      <div class="hero-links"><button data-act="quick-add">＋ ${eT("Add")}</button><button data-act="new-book">＋ ${eT("New shared book")}</button></div>
 </section>`;
   const backup = (S.meta.wasSignedIn || !clientId()) ? '' : `<button class="banner" data-act="settings"><span>☁️</span><span><b>${eT("Back up to Google Drive")}</b><small>${eT("Sync across devices. Works offline")}.</small></span><i>›</i></button>`;
   const name = (m && m.name !== 'Me' && m.name) || '';
@@ -943,7 +948,7 @@ function entrySheet(entryId, preset, bookId) {
     root.innerHTML = `<div class="sh-head"><div class="seg2"><button data-x="type" data-v="expense" class="${E.type === 'expense' ? 'on' : ''}">${eT("Expense")}</button><button data-x="type" data-v="${isP ? 'income' : 'settle'}" class="${E.type === (isP ? 'income' : 'settle') ? 'on' : ''}">${esc(isP ? T('Income') : T('Payment'))}</button></div>
         <button class="iconbtn" data-x="close" aria-label="${eT("Close")}">✕</button></div>
       ${!ex && books.length > 1 ? `<div class="pcs scroll">${books.map(k => `<button class="pc ${k.id === bid ? 'on' : ''}" data-x="book" data-v="${k.id}">${esc(k.emoji || '📒')} ${esc(k.personal ? T('My money') : k.name)}</button>`).join('')}</div>` : ''}
-      <div class="amt"><span class="cur">${esc(symbol(cur))}</span><input id="ea" inputmode="decimal" autocomplete="off" value="${esc(E.amount)}" placeholder="0"></div>
+      <div class="amt">${ex ? `<span class="cur">${esc(symbol(cur))}</span>` : `<button class="curchip" data-x="cur" aria-label="${eT('Currency')}: ${cur}"><b>${esc(symbol(cur))}</b><small>${cur} ▾</small></button>`}<input id="ea" inputmode="decimal" autocomplete="off" value="${esc(E.amount)}" placeholder="0"></div>
       ${isS ? '' : `<input id="ed" class="desc" value="${esc(E.desc)}" placeholder="${isI ? T("Where from?") : T("What was it for?")}" maxlength="80" autocomplete="off">
       <div class="cats">${(isI ? INCOME_CATS : CATS).map(([c, l]) => `<button data-x="cat" data-v="${c}" data-l="${l}" class="${E.cat === c ? 'on' : ''}"><i>${c}</i>${esc(T(l))}</button>`).join('')}</div>`}
       ${isP ? '' : `      <div class="lbl">${isS ? T("Who paid?") : T("Paid by")}</div><div class="pcs scroll">${members.map(i => pc(i, i === E.paidBy, 'paid')).join('')}</div>
@@ -992,6 +997,11 @@ function entrySheet(entryId, preset, bookId) {
     if (x === 'close') closeSheet();
     else if (x === 'type') { E.type = v; E.sel = v === 'settle' ? [members.find(i => i !== E.paidBy)].filter(Boolean) : [...members]; if (v === 'income') E.cat = '💼'; else if (INCOME_CATS.some(([k]) => k === E.cat) && E.cat !== '🎁') E.cat = '🧾'; draw(); }
     else if (x === 'book') { setBook(v); E.paidBy = defPayer(); E.sel = [...members]; E.vals = {}; if (b.personal && E.type === 'settle') E.type = 'expense'; if (!b.personal && E.type === 'income') { E.type = 'expense'; E.cat = '🧾'; } draw(); }
+    else if (x === 'cur') { pickCurrency(cur).then(async c => {
+      if (!c || c === cur) return;
+      if (bookEntries(bid).length && !(await askConfirm({ title: T('Change currency for “{name}”?', { name: b.personal ? T('My money') : b.name }), message: T('All amounts in this book switch to {cur}. Numbers are kept, not converted.', { cur: c }), ok: T('Change') }))) return;
+      pull(); changeCurrency(bid, c); setBook(bid); draw();
+    }); }
     else if (x === 'rep') { E.repeat = v; draw(); }
     else if (x === 'rview') { const r = E.receipts.find(z => z.id === v); r && viewReceipt(r); }
     else if (x === 'rdel') { E.receipts = E.receipts.filter(z => z.id !== v); if (E.fresh.includes(v)) { E.fresh = E.fresh.filter(z => z !== v); rcDB.del(v).catch(() => {}); } draw(); }

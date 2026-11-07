@@ -46,5 +46,16 @@ const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} → ${
   const ms = await p.evaluate(() => { const t = performance.now(); render(); return performance.now() - t; });
   ok(ms < 1500, `3000 entries render in ${Math.round(ms)}ms`);
   for (const w of [320, 390, 430]) { await p.setViewportSize({ width: w, height: 800 }); ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `no sideways scroll at ${w}px`); }
+
+  console.log('Add form: currency chip, date/note layout');
+  await p.setViewportSize({ width: 320, height: 700 }); await p.evaluate(() => { S.ui.view = 'home'; render(); });
+  await p.evaluate(() => { entrySheet(null, null, 'my-money'); }); await p.waitForSelector('#form .curchip');
+  const r = await p.evaluate(() => { const a = document.querySelector('#edt').getBoundingClientRect(), n = document.querySelector('#en').getBoundingClientRect(); return [a.right <= n.left + 1, a.left >= 0, n.right <= innerWidth]; });
+  eq(r, [true, true, true], 'date and note sit side by side without overlapping at 320px');
+  await p.click('#form .curchip'); await p.fill('#cq', 'USD'); await p.click('.layer .cur-row[data-v=USD]');
+  await p.waitForSelector('.dlg [data-x=ok]'); await p.waitForTimeout(500); await p.click('.dlg [data-x=ok]');
+  await p.waitForFunction(() => /USD/.test(document.querySelector('#form .curchip').innerText));
+  eq(await p.evaluate(() => personalBook().currency), 'USD', 'picking a currency in the form switches the book currency');
+  await p.keyboard.press('Escape');
   await b.close(); srv.close(); console.log(`\nPASS (${pass})`);
 })().catch(e => { console.error('FAIL', e); process.exit(1); });
